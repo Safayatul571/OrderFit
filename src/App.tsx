@@ -35,6 +35,7 @@ import {
 } from "lucide-react";
 
 import Production from "./Production";
+import Materials from "./Materials";
 import "./App.css";
 
 type PageKey =
@@ -1023,6 +1024,8 @@ const atRiskCount = dashboardStats.atRiskCount;
             
                     ) : page === "Production" ? (
             <Production orders={orders} />
+          ) : page === "Materials" ? (
+            <Materials />
           ) : (
             <section className="panel module-panel">
               <div className="module-empty-icon">
@@ -1032,8 +1035,7 @@ const atRiskCount = dashboardStats.atRiskCount;
                   <Users />
                 ) : page === "Machines" ? (
                   <Wrench />
-                ) : page === "Materials" ? (
-                  <Boxes />
+
                 ) : page === "Planning" ? (
                   <CalendarDays />
                 ) : page === "Reports" ? (

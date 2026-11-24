@@ -26,6 +26,33 @@ struct ProductionEntry {
     created_at: String,
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+struct Material {
+    id: String,
+    sku: String,
+    name: String,
+    category: String,
+    unit: String,
+    minimum_stock: f64,
+    current_stock: f64,
+    notes: String,
+    created_at: String,
+}
+
+// Inventory transaction history entry.
+#[derive(Debug, Serialize, Deserialize)]
+struct InventoryTransaction {
+    id: String,
+    material_id: String,
+    material_name: String,
+    sku: String,
+    transaction_type: String,
+    quantity_change: f64,
+    transaction_date: String,
+    reference: String,
+    notes: String,
+    created_at: String,
+}
 const PRODUCTION_STAGES: [&str; 4] =
     ["Cutting", "Sewing", "Finishing", "QC"];
 
@@ -47,6 +74,7 @@ fn database_connection(app: &AppHandle) -> Result<Connection, String> {
     connection
         .execute_batch("PRAGMA foreign_keys = ON;")
         .map_err(|e| e.to_string())?;
+    
 
     Ok(connection)
 }
@@ -93,6 +121,51 @@ fn initialize_database(app: &AppHandle) -> Result<(), String> {
             CREATE INDEX IF NOT EXISTS
                 idx_production_entries_date
             ON production_entries(production_date);",
+        )
+        .map_err(|e| e.to_string())?;
+
+        // Inventory materials and stock transaction history.
+    connection
+        .execute_batch(
+            "CREATE TABLE IF NOT EXISTS materials (
+                id TEXT PRIMARY KEY,
+                sku TEXT NOT NULL UNIQUE,
+                name TEXT NOT NULL,
+                category TEXT NOT NULL,
+                unit TEXT NOT NULL,
+                minimum_stock REAL NOT NULL DEFAULT 0
+                    CHECK(minimum_stock >= 0),
+                notes TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+
+            CREATE TABLE IF NOT EXISTS inventory_transactions (
+                id TEXT PRIMARY KEY,
+                material_id TEXT NOT NULL,
+                transaction_type TEXT NOT NULL
+                    CHECK(transaction_type IN (
+                        'Stock In',
+                        'Stock Out',
+                        'Adjustment'
+                    )),
+                quantity_change REAL NOT NULL
+                    CHECK(quantity_change != 0),
+                transaction_date TEXT NOT NULL,
+                reference TEXT NOT NULL DEFAULT '',
+                notes TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY(material_id)
+                    REFERENCES materials(id)
+                    ON DELETE RESTRICT
+            );
+
+            CREATE INDEX IF NOT EXISTS
+                idx_inventory_transactions_material
+            ON inventory_transactions(material_id);
+
+            CREATE INDEX IF NOT EXISTS
+                idx_inventory_transactions_date
+            ON inventory_transactions(transaction_date);",
         )
         .map_err(|e| e.to_string())?;
 
@@ -340,6 +413,457 @@ fn delete_order(app: AppHandle, id: String) -> Result<(), String> {
     Ok(())
 }
 
+
+// List all materials with calculated current stock.
+#[tauri::command]
+fn list_materials(app: AppHandle) -> Result<Vec<Material>, String> {
+    let connection = database_connection(&app)?;
+
+    let mut statement = connection
+        .prepare(
+            "SELECT
+                m.id,
+                m.sku,
+                m.name,
+                m.category,
+                m.unit,
+                m.minimum_stock,
+                COALESCE(SUM(t.quantity_change), 0) AS current_stock,
+                m.notes,
+                m.created_at
+             FROM materials m
+             LEFT JOIN inventory_transactions t
+                ON t.material_id = m.id
+             GROUP BY m.id
+             ORDER BY m.name COLLATE NOCASE ASC",
+        )
+        .map_err(|e| e.to_string())?;
+
+    let rows = statement
+        .query_map([], |row| {
+            Ok(Material {
+                id: row.get(0)?,
+                sku: row.get(1)?,
+                name: row.get(2)?,
+                category: row.get(3)?,
+                unit: row.get(4)?,
+                minimum_stock: row.get(5)?,
+                current_stock: row.get(6)?,
+                notes: row.get(7)?,
+                created_at: row.get(8)?,
+            })
+        })
+        .map_err(|e| e.to_string())?;
+
+    let mut materials = Vec::new();
+
+    for material in rows {
+        materials.push(material.map_err(|e| e.to_string())?);
+    }
+
+    Ok(materials)
+}
+
+// Create a new material.
+#[tauri::command]
+fn create_material(
+    app: AppHandle,
+    sku: String,
+    name: String,
+    category: String,
+    unit: String,
+    minimum_stock: f64,
+    notes: String,
+) -> Result<Material, String> {
+    if sku.trim().is_empty()
+        || name.trim().is_empty()
+        || category.trim().is_empty()
+        || unit.trim().is_empty()
+    {
+        return Err(
+            "SKU, name, category and unit are required.".into(),
+        );
+    }
+
+    if !minimum_stock.is_finite() || minimum_stock < 0.0 {
+        return Err(
+            "Minimum stock must be a valid non-negative number.".into(),
+        );
+    }
+
+    let connection = database_connection(&app)?;
+
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|e| e.to_string())?
+        .as_millis();
+
+    let material = Material {
+        id: format!("MAT-{timestamp}"),
+        sku: sku.trim().to_string(),
+        name: name.trim().to_string(),
+        category: category.trim().to_string(),
+        unit: unit.trim().to_string(),
+        minimum_stock,
+        current_stock: 0.0,
+        notes: notes.trim().to_string(),
+        created_at: String::new(),
+    };
+
+    connection
+        .execute(
+            "INSERT INTO materials
+                (id, sku, name, category, unit, minimum_stock, notes)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                material.id,
+                material.sku,
+                material.name,
+                material.category,
+                material.unit,
+                material.minimum_stock,
+                material.notes,
+            ],
+        )
+        .map_err(|e| e.to_string())?;
+
+    let mut saved = material;
+
+    saved.created_at = connection
+        .query_row(
+            "SELECT created_at FROM materials WHERE id = ?1",
+            params![saved.id],
+            |row| row.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+
+    Ok(saved)
+}
+
+
+
+// Update an existing material.
+#[tauri::command]
+fn update_material(
+    app: AppHandle,
+    id: String,
+    sku: String,
+    name: String,
+    category: String,
+    unit: String,
+    minimum_stock: f64,
+    notes: String,
+) -> Result<Material, String> {
+    if id.trim().is_empty()
+        || sku.trim().is_empty()
+        || name.trim().is_empty()
+        || category.trim().is_empty()
+        || unit.trim().is_empty()
+    {
+        return Err("ID, SKU, name, category and unit are required.".into());
+    }
+
+    if !minimum_stock.is_finite() || minimum_stock < 0.0 {
+        return Err("Minimum stock must be a valid non-negative number.".into());
+    }
+
+    let connection = database_connection(&app)?;
+
+    let changed = connection
+        .execute(
+            "UPDATE materials
+             SET sku = ?1,
+                 name = ?2,
+                 category = ?3,
+                 unit = ?4,
+                 minimum_stock = ?5,
+                 notes = ?6
+             WHERE id = ?7",
+            params![
+                sku.trim(),
+                name.trim(),
+                category.trim(),
+                unit.trim(),
+                minimum_stock,
+                notes.trim(),
+                id.trim(),
+            ],
+        )
+        .map_err(|e| e.to_string())?;
+
+    if changed == 0 {
+        return Err("Material not found.".into());
+    }
+
+    let material = connection
+        .query_row(
+            "SELECT
+                m.id,
+                m.sku,
+                m.name,
+                m.category,
+                m.unit,
+                m.minimum_stock,
+                COALESCE(
+                    (SELECT SUM(t.quantity_change)
+                     FROM inventory_transactions t
+                     WHERE t.material_id = m.id),
+                    0
+                ),
+                m.notes,
+                m.created_at
+             FROM materials m
+             WHERE m.id = ?1",
+            params![id.trim()],
+            |row| {
+                Ok(Material {
+                    id: row.get(0)?,
+                    sku: row.get(1)?,
+                    name: row.get(2)?,
+                    category: row.get(3)?,
+                    unit: row.get(4)?,
+                    minimum_stock: row.get(5)?,
+                    current_stock: row.get(6)?,
+                    notes: row.get(7)?,
+                    created_at: row.get(8)?,
+                })
+            },
+        )
+        .map_err(|e| e.to_string())?;
+
+    Ok(material)
+}
+
+// Delete a material. Existing inventory history prevents deletion.
+#[tauri::command]
+fn delete_material(app: AppHandle, id: String) -> Result<(), String> {
+    if id.trim().is_empty() {
+        return Err("Material ID is required.".into());
+    }
+
+    let connection = database_connection(&app)?;
+
+    let changed = connection
+        .execute(
+            "DELETE FROM materials WHERE id = ?1",
+            params![id.trim()],
+        )
+        .map_err(|e| {
+            format!(
+                "Could not delete material. It may have inventory history. Details: {e}"
+            )
+        })?;
+
+    if changed == 0 {
+        return Err("Material not found.".into());
+    }
+
+    Ok(())
+}
+
+// List inventory transaction history.
+#[tauri::command]
+fn list_inventory_transactions(
+    app: AppHandle,
+) -> Result<Vec<InventoryTransaction>, String> {
+    let connection = database_connection(&app)?;
+
+    let mut statement = connection
+        .prepare(
+            "SELECT
+                t.id,
+                t.material_id,
+                m.name,
+                m.sku,
+                t.transaction_type,
+                t.quantity_change,
+                t.transaction_date,
+                t.reference,
+                t.notes,
+                t.created_at
+             FROM inventory_transactions t
+             INNER JOIN materials m ON m.id = t.material_id
+             ORDER BY t.transaction_date DESC, t.created_at DESC",
+        )
+        .map_err(|e| e.to_string())?;
+
+    let rows = statement
+        .query_map([], |row| {
+            Ok(InventoryTransaction {
+                id: row.get(0)?,
+                material_id: row.get(1)?,
+                material_name: row.get(2)?,
+                sku: row.get(3)?,
+                transaction_type: row.get(4)?,
+                quantity_change: row.get(5)?,
+                transaction_date: row.get(6)?,
+                reference: row.get(7)?,
+                notes: row.get(8)?,
+                created_at: row.get(9)?,
+            })
+        })
+        .map_err(|e| e.to_string())?;
+
+    let mut transactions = Vec::new();
+
+    for transaction in rows {
+        transactions.push(transaction.map_err(|e| e.to_string())?);
+    }
+
+    Ok(transactions)
+}
+
+// Create a stock transaction with atomic balance validation.
+#[tauri::command]
+fn create_inventory_transaction(
+    app: AppHandle,
+    material_id: String,
+    transaction_type: String,
+    quantity: f64,
+    transaction_date: String,
+    reference: String,
+    notes: String,
+) -> Result<InventoryTransaction, String> {
+    if material_id.trim().is_empty() {
+        return Err("Material is required.".into());
+    }
+
+    if !quantity.is_finite() || quantity == 0.0 {
+        return Err("Quantity must be a valid non-zero number.".into());
+    }
+
+    if transaction_date.trim().is_empty() {
+        return Err("Transaction date is required.".into());
+    }
+
+    let quantity_change = match transaction_type.as_str() {
+        "Stock In" => {
+            if quantity <= 0.0 {
+                return Err("Stock In quantity must be positive.".into());
+            }
+            quantity
+        }
+        "Stock Out" => {
+            if quantity <= 0.0 {
+                return Err("Stock Out quantity must be positive.".into());
+            }
+            -quantity
+        }
+        "Adjustment" => quantity,
+        _ => {
+            return Err("Invalid transaction type.".into());
+        }
+    };
+
+    let mut connection = database_connection(&app)?;
+
+    let transaction = connection
+        .transaction_with_behavior(
+            rusqlite::TransactionBehavior::Immediate,
+        )
+        .map_err(|e| e.to_string())?;
+
+    let material_exists: bool = transaction
+        .query_row(
+            "SELECT EXISTS(
+                SELECT 1 FROM materials WHERE id = ?1
+             )",
+            params![material_id.trim()],
+            |row| row.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+
+    if !material_exists {
+        return Err("Material not found.".into());
+    }
+
+    let current_stock: f64 = transaction
+        .query_row(
+            "SELECT COALESCE(SUM(quantity_change), 0)
+             FROM inventory_transactions
+             WHERE material_id = ?1",
+            params![material_id.trim()],
+            |row| row.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+
+    let new_stock = current_stock + quantity_change;
+
+    if new_stock < -0.0000001 {
+        return Err(format!(
+            "Insufficient stock. Available: {current_stock}"
+        ));
+    }
+
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|e| e.to_string())?
+        .as_millis();
+
+    let id = format!("INV-{timestamp}");
+
+    transaction
+        .execute(
+            "INSERT INTO inventory_transactions (
+                id,
+                material_id,
+                transaction_type,
+                quantity_change,
+                transaction_date,
+                reference,
+                notes
+             )
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                id,
+                material_id.trim(),
+                transaction_type,
+                quantity_change,
+                transaction_date.trim(),
+                reference.trim(),
+                notes.trim(),
+            ],
+        )
+        .map_err(|e| e.to_string())?;
+
+    let saved = transaction
+        .query_row(
+            "SELECT
+                t.id,
+                t.material_id,
+                m.name,
+                m.sku,
+                t.transaction_type,
+                t.quantity_change,
+                t.transaction_date,
+                t.reference,
+                t.notes,
+                t.created_at
+             FROM inventory_transactions t
+             INNER JOIN materials m ON m.id = t.material_id
+             WHERE t.id = ?1",
+            params![id],
+            |row| {
+                Ok(InventoryTransaction {
+                    id: row.get(0)?,
+                    material_id: row.get(1)?,
+                    material_name: row.get(2)?,
+                    sku: row.get(3)?,
+                    transaction_type: row.get(4)?,
+                    quantity_change: row.get(5)?,
+                    transaction_date: row.get(6)?,
+                    reference: row.get(7)?,
+                    notes: row.get(8)?,
+                    created_at: row.get(9)?,
+                })
+            },
+        )
+        .map_err(|e| e.to_string())?;
+
+    transaction.commit().map_err(|e| e.to_string())?;
+
+    Ok(saved)
+}
 // List all production history entries.
 #[tauri::command]
 fn list_production_entries(
@@ -366,6 +890,7 @@ fn list_production_entries(
                 production_date: row.get(4)?,
                 notes: row.get(5)?,
                 created_at: row.get(6)?,
+
             })
         })
         .map_err(|e| e.to_string())?;
@@ -535,15 +1060,21 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            list_orders,
-            create_order,
-            update_order,
-            delete_order,
-            list_production_entries,
-            create_production_entry,
-            update_production_entry,
-            delete_production_entry
-        ])
+    list_orders,
+    create_order,
+    update_order,
+    delete_order,
+    list_materials,
+    create_material,
+    update_material,
+    delete_material,
+    list_inventory_transactions,
+    create_inventory_transaction,
+    list_production_entries,
+    create_production_entry,
+    update_production_entry,
+    delete_production_entry
+])
         .run(tauri::generate_context!())
         .expect("error while running OrderFit");
 }
