@@ -34,6 +34,7 @@ import {
   Wrench,
 } from "lucide-react";
 
+import Production from "./Production";
 import "./App.css";
 
 type PageKey =
@@ -49,6 +50,16 @@ type PageKey =
   | "Settings";
 
 type OrderStatus = "On Track" | "At Risk" | "Completed";
+
+type ProductionEntry = {
+  id: string;
+  order_id: string;
+  stage: string;
+  completed_quantity: number;
+  production_date: string;
+  notes: string;
+  created_at: string;
+};
 
 type Order = {
   id: string;
@@ -92,6 +103,15 @@ function App() {
   const [page, setPage] = useState<PageKey>("Dashboard");
   const [orders, setOrders] = useState<Order[]>([]);
 
+  const [productionEntries, setProductionEntries] =
+  useState<ProductionEntry[]>([]);
+
+const [productionLoading, setProductionLoading] =
+  useState(false);
+
+const [productionError, setProductionError] =
+  useState("");
+
   const [databaseLoading, setDatabaseLoading] = useState(true);
   const [databaseError, setDatabaseError] = useState("");
 
@@ -131,10 +151,34 @@ function App() {
     }
   };
 
+  // Load production records from SQLite.
+const loadProductionEntries = async () => {
+  try {
+    setProductionLoading(true);
+    setProductionError("");
+
+    const result = await invoke<ProductionEntry[]>(
+      "list_production_entries"
+    );
+
+    setProductionEntries(result);
+  } catch (error) {
+    console.error("Failed to load production entries:", error);
+    setProductionError(String(error));
+  } finally {
+    setProductionLoading(false);
+  }
+};
+
   useEffect(() => {
     void loadOrders();
   }, []);
 
+  useEffect(() => {
+  if (page === "Dashboard") {
+    void loadProductionEntries();
+  }
+}, [page]);
   // Search and filter.
   const filteredOrders = useMemo(
     () =>
@@ -308,9 +352,66 @@ function App() {
     Settings: "Configure your OrderFit workspace.",
   };
 
+  
+
+const dashboardStats = useMemo(() => {
+  const totalOrders = orders.length;
+
+  const onTrackCount = orders.filter(
+    (order) => order.status === "On Track"
+  ).length;
+
   const atRiskCount = orders.filter(
     (order) => order.status === "At Risk"
   ).length;
+
+  const completedCount = orders.filter(
+    (order) => order.status === "Completed"
+  ).length;
+
+  const activeOrders = totalOrders - completedCount;
+
+  const averageProgress =
+    totalOrders === 0
+      ? 0
+      : Math.round(
+          orders.reduce(
+            (total, order) => total + order.progress,
+            0
+          ) / totalOrders
+        );
+
+  const onTrackPercentage =
+    totalOrders === 0
+      ? 0
+      : (onTrackCount / totalOrders) * 100;
+
+  const atRiskPercentage =
+    totalOrders === 0
+      ? 0
+      : (atRiskCount / totalOrders) * 100;
+
+  const completedPercentage =
+    totalOrders === 0
+      ? 0
+      : (completedCount / totalOrders) * 100;
+
+  return {
+    totalOrders,
+    onTrackCount,
+    atRiskCount,
+    completedCount,
+    activeOrders,
+    averageProgress,
+    onTrackPercentage,
+    atRiskPercentage,
+    completedPercentage,
+  };
+}, [orders]);
+
+const atRiskCount = dashboardStats.atRiskCount;
+
+
 
   return (
     <div className="app-shell">
@@ -538,74 +639,220 @@ function App() {
           {page === "Dashboard" ? (
             <>
               <div className="metric-grid">
-                <MetricCard
-                  label="Total orders"
-                  value={String(orders.length)}
-                  change="Live database"
-                  positive
-                  detail="Saved orders"
-                  icon={<ClipboardList size={18} />}
-                  tone="violet"
-                />
+                
+<MetricCard
+  label="Total orders"
+  value={String(dashboardStats.totalOrders)}
+  change="Live database"
+  positive
+  detail="All saved orders"
+  icon={<ClipboardList size={18} />}
+  tone="violet"
+/>
 
-                <MetricCard
-                  label="Production output"
-                  value="—"
-                  change="Not connected"
-                  positive={false}
-                  detail="Production module"
-                  icon={<Gauge size={18} />}
-                  tone="blue"
-                />
+<MetricCard
+  label="Active orders"
+  value={String(dashboardStats.activeOrders)}
+  change="Currently in progress"
+  positive
+  detail="Not yet completed"
+  icon={<Gauge size={18} />}
+  tone="blue"
+/>
 
-                <MetricCard
-                  label="On-time delivery"
-                  value="—"
-                  change="Not calculated"
-                  positive
-                  detail="Delivery analytics"
-                  icon={<Truck size={18} />}
-                  tone="green"
-                />
+<MetricCard
+  label="Completed orders"
+  value={String(dashboardStats.completedCount)}
+  change="Successfully completed"
+  positive
+  detail="Completed orders"
+  icon={<Truck size={18} />}
+  tone="green"
+/>
 
-                <MetricCard
-                  label="Pending materials"
-                  value="—"
-                  change="Not connected"
-                  positive={false}
-                  detail="Inventory module"
-                  icon={<Boxes size={18} />}
-                  tone="orange"
-                />
+<MetricCard
+  label="Average progress"
+  value={`${dashboardStats.averageProgress}%`}
+  change="Based on saved orders"
+  positive
+  detail="Average order progress"
+  icon={<Boxes size={18} />}
+  tone="orange"
+/>
+
               </div>
 
               <div className="dashboard-grid">
-                <section className="panel production-panel">
-                  <div className="panel-heading">
-                    <div>
-                      <h2>Production overview</h2>
-                      <p>Production analytics will appear here.</p>
-                    </div>
+                
 
-                    <button className="select-button">
-                      This week <ChevronDown size={14} />
-                    </button>
-                  </div>
+<section className="panel production-panel">
+  <div className="panel-heading">
+    <div>
+      <h2>Production overview</h2>
+      <p>Live production progress across all orders</p>
+    </div>
 
-                  <div
-                    style={{
-                      minHeight: "240px",
-                      display: "grid",
-                      placeItems: "center",
-                      color: "var(--text-muted)",
-                    }}
-                  >
-                    <div style={{ textAlign: "center" }}>
-                      <Gauge size={32} />
-                      <p>Connect production data to see analytics.</p>
-                    </div>
-                  </div>
-                </section>
+    <button className="select-button">
+      All records <ChevronDown size={14} />
+    </button>
+  </div>
+
+  {productionLoading ? (
+    <div
+      style={{
+        minHeight: "240px",
+        display: "grid",
+        placeItems: "center",
+        color: "var(--text-muted)",
+      }}
+    >
+      Loading production data...
+    </div>
+  ) : productionError ? (
+    <div
+      style={{
+        minHeight: "240px",
+        display: "grid",
+        placeItems: "center",
+        color: "var(--text-muted)",
+        textAlign: "center",
+      }}
+    >
+      <div>
+        <Gauge size={30} />
+        <p>Unable to load production data.</p>
+        <span>{productionError}</span>
+      </div>
+    </div>
+  ) : (
+    <div style={{ paddingTop: "12px" }}>
+      {["Cutting", "Sewing", "Finishing", "QC"].map((stage) => {
+        const completed = productionEntries
+          .filter((entry) => entry.stage === stage)
+          .reduce(
+            (total, entry) => total + entry.completed_quantity,
+            0
+          );
+
+        const target = orders.reduce((total, order) => {
+          const match = order.quantity.trim().match(/^\d+/);
+          return total + (match ? Number(match[0]) : 0);
+        }, 0);
+
+        const percentage =
+          target > 0
+            ? Math.min(100, Math.round((completed / target) * 100))
+            : 0;
+
+        return (
+          <div
+            key={stage}
+            style={{
+              marginBottom: "22px",
+            }}
+          >
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+                marginBottom: "9px",
+                gap: "12px",
+              }}
+            >
+              <span
+                style={{
+                  fontSize: "13px",
+                  fontWeight: 600,
+                  color: "var(--text-primary)",
+                }}
+              >
+                {stage}
+              </span>
+
+              <span
+                style={{
+                  fontSize: "12px",
+                  color: "var(--text-muted)",
+                  whiteSpace: "nowrap",
+                }}
+              >
+                {completed.toLocaleString()} / {target.toLocaleString()} pcs
+              </span>
+            </div>
+
+            <div
+              style={{
+                height: "8px",
+                width: "100%",
+                background: "var(--border-color)",
+                borderRadius: "20px",
+                overflow: "hidden",
+              }}
+            >
+              <div
+                style={{
+                  height: "100%",
+                  width: `${percentage}%`,
+                  background: "var(--primary)",
+                  borderRadius: "20px",
+                  transition: "width 0.3s ease",
+                }}
+              />
+            </div>
+          </div>
+        );
+      })}
+
+      <div
+        style={{
+          borderTop: "1px solid var(--border-color)",
+          paddingTop: "14px",
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+          gap: "12px",
+        }}
+      >
+        <div>
+          <span
+            style={{
+              display: "block",
+              fontSize: "12px",
+              color: "var(--text-muted)",
+            }}
+          >
+            Total production records
+          </span>
+          <strong style={{ fontSize: "19px" }}>
+            {productionEntries.length}
+          </strong>
+        </div>
+
+        <div style={{ textAlign: "right" }}>
+          <span
+            style={{
+              display: "block",
+              fontSize: "12px",
+              color: "var(--text-muted)",
+            }}
+          >
+            QC completed
+          </span>
+          <strong style={{ fontSize: "19px" }}>
+            {productionEntries
+              .filter((entry) => entry.stage === "QC")
+              .reduce(
+                (total, entry) => total + entry.completed_quantity,
+                0
+              ).toLocaleString()} pcs
+          </strong>
+        </div>
+      </div>
+    </div>
+  )}
+</section>
+
 
                 <section className="panel status-panel">
                   <div className="panel-heading">
@@ -622,6 +869,35 @@ function App() {
                     </button>
                   </div>
 
+
+                  <div className="donut-wrap">
+                    <div
+                      className="donut"
+                      style={{
+                        background:
+                          dashboardStats.totalOrders === 0
+                            ? "conic-gradient(#eceef4 0 100%)"
+                            : `conic-gradient(
+                                #705cdd 0% ${dashboardStats.onTrackPercentage}%,
+                                #8eb5ed ${dashboardStats.onTrackPercentage}% ${
+                                  dashboardStats.onTrackPercentage +
+                                  dashboardStats.atRiskPercentage
+                                }%,
+                                #72c29a ${
+                                  dashboardStats.onTrackPercentage +
+                                  dashboardStats.atRiskPercentage
+                                }% 100%
+                              )`,
+                      }}
+                    >
+                      <div className="donut-center">
+                        <strong>{dashboardStats.totalOrders}</strong>
+                        <span>Total orders</span>
+                      </div>
+                    </div>
+                  </div>
+
+
                   <div className="status-legend">
                     <div>
                       <span>
@@ -629,8 +905,8 @@ function App() {
                         On Track
                       </span>
                       <strong>
-                        {orders.filter((o) => o.status === "On Track").length}
-                      </strong>
+  {dashboardStats.onTrackCount} ({dashboardStats.onTrackPercentage.toFixed(1)}%)
+</strong>
                     </div>
 
                     <div>
@@ -638,7 +914,9 @@ function App() {
                         <i className="status-dot dot-blue" />
                         At Risk
                       </span>
-                      <strong>{atRiskCount}</strong>
+                      <strong>
+  {dashboardStats.atRiskCount} ({dashboardStats.atRiskPercentage.toFixed(1)}%)
+</strong>
                     </div>
 
                     <div>
@@ -647,8 +925,8 @@ function App() {
                         Completed
                       </span>
                       <strong>
-                        {orders.filter((o) => o.status === "Completed").length}
-                      </strong>
+  {dashboardStats.completedCount} ({dashboardStats.completedPercentage.toFixed(1)}%)
+</strong>
                     </div>
                   </div>
                 </section>
@@ -742,13 +1020,14 @@ function App() {
                 </section>
               </div>
             </>
+            
+                    ) : page === "Production" ? (
+            <Production orders={orders} />
           ) : (
             <section className="panel module-panel">
               <div className="module-empty-icon">
-                {page === "Orders" ? (
+                                {page === "Orders" ? (
                   <ClipboardList />
-                ) : page === "Production" ? (
-                  <Factory />
                 ) : page === "Buyers" || page === "Workers" ? (
                   <Users />
                 ) : page === "Machines" ? (
