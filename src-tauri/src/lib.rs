@@ -1,5 +1,4 @@
-
-use rusqlite::{params, Connection};
+use rusqlite::{Connection, params};
 use serde::{Deserialize, Serialize};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Manager};
@@ -65,28 +64,67 @@ struct InventoryTransaction {
     notes: String,
     created_at: String,
 }
-const PRODUCTION_STAGES: [&str; 4] =
-    ["Cutting", "Sewing", "Finishing", "QC"];
+#[derive(Debug, Serialize, Deserialize)]
+struct PurchaseOrder {
+    id: String,
+    po_number: String,
+    supplier_id: String,
+    supplier_name: String,
+    order_date: String,
+    expected_delivery_date: String,
+    status: String,
+    notes: String,
+    total_amount: f64,
+    created_at: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct PurchaseOrderItem {
+    id: String,
+    purchase_order_id: String,
+    material_id: String,
+    material_name: String,
+    sku: String,
+    unit: String,
+    ordered_quantity: f64,
+    received_quantity: f64,
+    unit_price: f64,
+    subtotal: f64,
+}
+
+#[derive(Debug, Deserialize)]
+struct PurchaseOrderItemInput {
+    material_id: String,
+    ordered_quantity: f64,
+    unit_price: f64,
+}
+#[derive(Debug, Serialize, Deserialize)]
+struct PurchaseOrderReceipt {
+    id: String,
+    purchase_order_item_id: String,
+    material_id: String,
+    material_name: String,
+    quantity_received: f64,
+    receipt_date: String,
+    inventory_transaction_id: String,
+    notes: String,
+    created_at: String,
+}
+const PRODUCTION_STAGES: [&str; 4] = ["Cutting", "Sewing", "Finishing", "QC"];
 
 fn database_connection(app: &AppHandle) -> Result<Connection, String> {
-    let directory = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| e.to_string())?;
+    let directory = app.path().app_data_dir().map_err(|e| e.to_string())?;
 
-    std::fs::create_dir_all(&directory)
-        .map_err(|e| e.to_string())?;
+    std::fs::create_dir_all(&directory).map_err(|e| e.to_string())?;
 
     let database_path = directory.join("orderfit.db");
 
-    let connection =
-        Connection::open(database_path).map_err(|e| e.to_string())?;
+    let connection = Connection::open(database_path).map_err(|e| e.to_string())?;
 
     // Enable foreign keys for every database connection.
     connection
         .execute_batch("PRAGMA foreign_keys = ON;")
         .map_err(|e| e.to_string())?;
-    
 
     Ok(connection)
 }
@@ -136,7 +174,7 @@ fn initialize_database(app: &AppHandle) -> Result<(), String> {
         )
         .map_err(|e| e.to_string())?;
 
-        // Inventory materials and stock transaction history.
+    // Inventory materials and stock transaction history.
     connection
         .execute_batch(
             "CREATE TABLE IF NOT EXISTS materials (
@@ -200,9 +238,83 @@ fn initialize_database(app: &AppHandle) -> Result<(), String> {
         )
         .map_err(|e| e.to_string())?;
 
+    connection
+        .execute_batch(
+            "CREATE TABLE IF NOT EXISTS purchase_orders (
+                id TEXT PRIMARY KEY,
+                po_number TEXT NOT NULL UNIQUE,
+                supplier_id TEXT NOT NULL,
+                order_date TEXT NOT NULL,
+                expected_delivery_date TEXT NOT NULL DEFAULT '',
+                status TEXT NOT NULL DEFAULT 'Draft'
+                    CHECK(status IN (
+                        'Draft',
+                        'Pending',
+                        'Ordered',
+                        'Partially Received',
+                        'Received',
+                        'Cancelled'
+                    )),
+                notes TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY(supplier_id)
+                    REFERENCES suppliers(id)
+                    ON DELETE RESTRICT
+            );
+
+            CREATE TABLE IF NOT EXISTS purchase_order_items (
+                id TEXT PRIMARY KEY,
+                purchase_order_id TEXT NOT NULL,
+                material_id TEXT NOT NULL,
+                ordered_quantity REAL NOT NULL
+                    CHECK(ordered_quantity > 0),
+                received_quantity REAL NOT NULL DEFAULT 0
+                    CHECK(received_quantity >= 0
+                        AND received_quantity <= ordered_quantity),
+                unit_price REAL NOT NULL
+                    CHECK(unit_price >= 0),
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY(purchase_order_id)
+                    REFERENCES purchase_orders(id)
+                    ON DELETE CASCADE,
+                FOREIGN KEY(material_id)
+                    REFERENCES materials(id)
+                    ON DELETE RESTRICT,
+                UNIQUE(purchase_order_id, material_id)
+            );
+
+            CREATE TABLE IF NOT EXISTS purchase_order_receipts (
+                id TEXT PRIMARY KEY,
+                purchase_order_item_id TEXT NOT NULL,
+                quantity_received REAL NOT NULL
+                    CHECK(quantity_received > 0),
+                receipt_date TEXT NOT NULL,
+                inventory_transaction_id TEXT NOT NULL UNIQUE,
+                notes TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY(purchase_order_item_id)
+                    REFERENCES purchase_order_items(id)
+                    ON DELETE RESTRICT,
+                FOREIGN KEY(inventory_transaction_id)
+                    REFERENCES inventory_transactions(id)
+                    ON DELETE RESTRICT
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_purchase_orders_supplier
+                ON purchase_orders(supplier_id);
+
+            CREATE INDEX IF NOT EXISTS idx_purchase_orders_status
+                ON purchase_orders(status);
+
+            CREATE INDEX IF NOT EXISTS idx_purchase_order_items_order
+                ON purchase_order_items(purchase_order_id);
+
+            CREATE INDEX IF NOT EXISTS idx_purchase_order_receipts_item
+                ON purchase_order_receipts(purchase_order_item_id);",
+        )
+        .map_err(|e| e.to_string())?;
     Ok(())
 }
-
 
 // Extract the numeric part from quantities such as "500 pcs".
 fn parse_order_quantity(quantity: &str) -> Result<i64, String> {
@@ -225,9 +337,7 @@ fn parse_order_quantity(quantity: &str) -> Result<i64, String> {
 
 fn validate_production_stage(stage: &str) -> Result<(), String> {
     if !PRODUCTION_STAGES.contains(&stage) {
-        return Err(
-            "Invalid stage. Use Cutting, Sewing, Finishing or QC.".into(),
-        );
+        return Err("Invalid stage. Use Cutting, Sewing, Finishing or QC.".into());
     }
 
     Ok(())
@@ -328,10 +438,7 @@ fn create_order(
     quantity: String,
     due: String,
 ) -> Result<Order, String> {
-    if buyer.trim().is_empty()
-        || product.trim().is_empty()
-        || quantity.trim().is_empty()
-    {
+    if buyer.trim().is_empty() || product.trim().is_empty() || quantity.trim().is_empty() {
         return Err("Buyer, product and quantity are required.".into());
     }
 
@@ -385,10 +492,7 @@ fn update_order(
     progress: i32,
     status: String,
 ) -> Result<(), String> {
-    if buyer.trim().is_empty()
-        || product.trim().is_empty()
-        || quantity.trim().is_empty()
-    {
+    if buyer.trim().is_empty() || product.trim().is_empty() || quantity.trim().is_empty() {
         return Err("Buyer, product and quantity are required.".into());
     }
 
@@ -432,10 +536,7 @@ fn delete_order(app: AppHandle, id: String) -> Result<(), String> {
     let connection = database_connection(&app)?;
 
     let changed = connection
-        .execute(
-            "DELETE FROM orders WHERE id = ?1",
-            params![id],
-        )
+        .execute("DELETE FROM orders WHERE id = ?1", params![id])
         .map_err(|e| e.to_string())?;
 
     if changed == 0 {
@@ -444,7 +545,6 @@ fn delete_order(app: AppHandle, id: String) -> Result<(), String> {
 
     Ok(())
 }
-
 
 // List all materials with calculated current stock.
 #[tauri::command]
@@ -499,6 +599,623 @@ fn list_materials(app: AppHandle) -> Result<Vec<Material>, String> {
 // Create a new material.
 // List all suppliers.
 #[tauri::command]
+fn list_purchase_orders(app: AppHandle) -> Result<Vec<PurchaseOrder>, String> {
+    let connection = database_connection(&app)?;
+
+    let mut statement = connection
+        .prepare(
+            "SELECT
+                p.id,
+                p.po_number,
+                p.supplier_id,
+                s.name,
+                p.order_date,
+                p.expected_delivery_date,
+                p.status,
+                p.notes,
+                COALESCE(SUM(i.ordered_quantity * i.unit_price), 0),
+                p.created_at
+             FROM purchase_orders p
+             INNER JOIN suppliers s ON s.id = p.supplier_id
+             LEFT JOIN purchase_order_items i
+                ON i.purchase_order_id = p.id
+             GROUP BY p.id
+             ORDER BY p.created_at DESC",
+        )
+        .map_err(|e| e.to_string())?;
+
+    let rows = statement
+        .query_map([], |row| {
+            Ok(PurchaseOrder {
+                id: row.get(0)?,
+                po_number: row.get(1)?,
+                supplier_id: row.get(2)?,
+                supplier_name: row.get(3)?,
+                order_date: row.get(4)?,
+                expected_delivery_date: row.get(5)?,
+                status: row.get(6)?,
+                notes: row.get(7)?,
+                total_amount: row.get(8)?,
+                created_at: row.get(9)?,
+            })
+        })
+        .map_err(|e| e.to_string())?;
+
+    let mut purchase_orders = Vec::new();
+
+    for order in rows {
+        purchase_orders.push(order.map_err(|e| e.to_string())?);
+    }
+
+    Ok(purchase_orders)
+}
+
+#[tauri::command]
+fn create_purchase_order(
+    app: AppHandle,
+    po_number: String,
+    supplier_id: String,
+    order_date: String,
+    expected_delivery_date: String,
+    notes: String,
+    items: Vec<PurchaseOrderItemInput>,
+) -> Result<String, String> {
+    if po_number.trim().is_empty() {
+        return Err("PO number is required.".into());
+    }
+
+    if supplier_id.trim().is_empty() {
+        return Err("Supplier is required.".into());
+    }
+
+    if order_date.trim().is_empty() {
+        return Err("Order date is required.".into());
+    }
+
+    if items.is_empty() {
+        return Err("At least one material item is required.".into());
+    }
+
+    let mut seen_materials = std::collections::HashSet::new();
+
+    for item in &items {
+        if item.material_id.trim().is_empty() {
+            return Err("Every line item must have a material.".into());
+        }
+
+        if !item.ordered_quantity.is_finite() || item.ordered_quantity <= 0.0 {
+            return Err("Ordered quantity must be greater than zero.".into());
+        }
+
+        if !item.unit_price.is_finite() || item.unit_price < 0.0 {
+            return Err("Unit price must be a valid non-negative number.".into());
+        }
+
+        if !seen_materials.insert(item.material_id.trim().to_string()) {
+            return Err("A material can only appear once in a purchase order.".into());
+        }
+    }
+
+    let mut connection = database_connection(&app)?;
+
+    let transaction = connection
+        .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+        .map_err(|e| e.to_string())?;
+
+    let supplier_exists: bool = transaction
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM suppliers WHERE id = ?1)",
+            params![supplier_id.trim()],
+            |row| row.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+
+    if !supplier_exists {
+        return Err("Selected supplier was not found.".into());
+    }
+
+    for item in &items {
+        let material_exists: bool = transaction
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM materials WHERE id = ?1)",
+                params![item.material_id.trim()],
+                |row| row.get(0),
+            )
+            .map_err(|e| e.to_string())?;
+
+        if !material_exists {
+            return Err(format!("Material not found: {}", item.material_id));
+        }
+    }
+
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|e| e.to_string())?
+        .as_millis();
+
+    let id = format!("PO-{timestamp}");
+
+    transaction
+        .execute(
+            "INSERT INTO purchase_orders (
+                id,
+                po_number,
+                supplier_id,
+                order_date,
+                expected_delivery_date,
+                status,
+                notes
+             )
+             VALUES (?1, ?2, ?3, ?4, ?5, 'Draft', ?6)",
+            params![
+                id,
+                po_number.trim(),
+                supplier_id.trim(),
+                order_date.trim(),
+                expected_delivery_date.trim(),
+                notes.trim()
+            ],
+        )
+        .map_err(|e| {
+            if e.to_string().contains("UNIQUE") {
+                "This PO number already exists.".to_string()
+            } else {
+                e.to_string()
+            }
+        })?;
+
+    for (index, item) in items.iter().enumerate() {
+        let item_id = format!("POI-{timestamp}-{index}");
+
+        transaction
+            .execute(
+                "INSERT INTO purchase_order_items (
+                    id,
+                    purchase_order_id,
+                    material_id,
+                    ordered_quantity,
+                    received_quantity,
+                    unit_price
+                 )
+                 VALUES (?1, ?2, ?3, ?4, 0, ?5)",
+                params![
+                    item_id,
+                    id,
+                    item.material_id.trim(),
+                    item.ordered_quantity,
+                    item.unit_price
+                ],
+            )
+            .map_err(|e| e.to_string())?;
+    }
+
+    transaction.commit().map_err(|e| e.to_string())?;
+
+    Ok(id)
+}
+#[tauri::command]
+fn list_purchase_order_items(
+    app: AppHandle,
+    purchase_order_id: String,
+) -> Result<Vec<PurchaseOrderItem>, String> {
+    let connection = database_connection(&app)?;
+
+    let mut statement = connection
+        .prepare(
+            "SELECT
+                i.id,
+                i.purchase_order_id,
+                i.material_id,
+                m.name,
+                m.sku,
+                m.unit,
+                i.ordered_quantity,
+                i.received_quantity,
+                i.unit_price,
+                i.ordered_quantity * i.unit_price
+             FROM purchase_order_items i
+             INNER JOIN materials m ON m.id = i.material_id
+             WHERE i.purchase_order_id = ?1
+             ORDER BY i.created_at ASC",
+        )
+        .map_err(|e| e.to_string())?;
+
+    let rows = statement
+        .query_map(params![purchase_order_id.trim()], |row| {
+            Ok(PurchaseOrderItem {
+                id: row.get(0)?,
+                purchase_order_id: row.get(1)?,
+                material_id: row.get(2)?,
+                material_name: row.get(3)?,
+                sku: row.get(4)?,
+                unit: row.get(5)?,
+                ordered_quantity: row.get(6)?,
+                received_quantity: row.get(7)?,
+                unit_price: row.get(8)?,
+                subtotal: row.get(9)?,
+            })
+        })
+        .map_err(|e| e.to_string())?;
+
+    let mut items = Vec::new();
+
+    for item in rows {
+        items.push(item.map_err(|e| e.to_string())?);
+    }
+
+    Ok(items)
+}
+
+#[tauri::command]
+fn list_purchase_order_receipts(
+    app: AppHandle,
+    purchase_order_id: String,
+) -> Result<Vec<PurchaseOrderReceipt>, String> {
+    let connection = database_connection(&app)?;
+
+    let mut statement = connection
+        .prepare(
+            "SELECT
+                r.id,
+                r.purchase_order_item_id,
+                i.material_id,
+                m.name,
+                r.quantity_received,
+                r.receipt_date,
+                r.inventory_transaction_id,
+                r.notes,
+                r.created_at
+             FROM purchase_order_receipts r
+             INNER JOIN purchase_order_items i
+                ON i.id = r.purchase_order_item_id
+             INNER JOIN materials m ON m.id = i.material_id
+             WHERE i.purchase_order_id = ?1
+             ORDER BY r.receipt_date DESC, r.created_at DESC",
+        )
+        .map_err(|e| e.to_string())?;
+
+    let rows = statement
+        .query_map(params![purchase_order_id.trim()], |row| {
+            Ok(PurchaseOrderReceipt {
+                id: row.get(0)?,
+                purchase_order_item_id: row.get(1)?,
+                material_id: row.get(2)?,
+                material_name: row.get(3)?,
+                quantity_received: row.get(4)?,
+                receipt_date: row.get(5)?,
+                inventory_transaction_id: row.get(6)?,
+                notes: row.get(7)?,
+                created_at: row.get(8)?,
+            })
+        })
+        .map_err(|e| e.to_string())?;
+
+    let mut receipts = Vec::new();
+
+    for receipt in rows {
+        receipts.push(receipt.map_err(|e| e.to_string())?);
+    }
+
+    Ok(receipts)
+}
+
+#[tauri::command]
+fn update_purchase_order_status(
+    app: AppHandle,
+    purchase_order_id: String,
+    status: String,
+) -> Result<(), String> {
+    let allowed_statuses = ["Draft", "Pending", "Ordered", "Cancelled"];
+
+    if !allowed_statuses.contains(&status.as_str()) {
+        return Err("Invalid status. Select Draft, Pending, Ordered or Cancelled.".into());
+    }
+
+    let mut connection = database_connection(&app)?;
+
+    let transaction = connection
+        .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+        .map_err(|e| e.to_string())?;
+
+    let current_status: String = transaction
+        .query_row(
+            "SELECT status FROM purchase_orders WHERE id = ?1",
+            params![purchase_order_id.trim()],
+            |row| row.get(0),
+        )
+        .map_err(|_| "Purchase order was not found.".to_string())?;
+
+    let received_quantity: f64 = transaction
+        .query_row(
+            "SELECT COALESCE(SUM(received_quantity), 0)
+             FROM purchase_order_items
+             WHERE purchase_order_id = ?1",
+            params![purchase_order_id.trim()],
+            |row| row.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+
+    if status == "Draft" && current_status != "Draft" {
+        return Err("An existing purchase order cannot be moved back to Draft.".into());
+    }
+
+    if status == "Pending" && current_status != "Draft" && current_status != "Pending" {
+        return Err("Only Draft purchase orders can be moved to Pending.".into());
+    }
+
+    if status == "Ordered"
+        && current_status != "Draft"
+        && current_status != "Pending"
+        && current_status != "Ordered"
+    {
+        return Err("This purchase order cannot be marked as Ordered.".into());
+    }
+
+    if status == "Cancelled" && received_quantity > 0.0000001 {
+        return Err("A purchase order with received materials cannot be cancelled.".into());
+    }
+
+    if current_status == "Received" || current_status == "Cancelled" {
+        if current_status != status {
+            return Err("This purchase order is already closed.".into());
+        }
+    }
+
+    transaction
+        .execute(
+            "UPDATE purchase_orders SET status = ?1 WHERE id = ?2",
+            params![status, purchase_order_id.trim()],
+        )
+        .map_err(|e| e.to_string())?;
+
+    transaction.commit().map_err(|e| e.to_string())?;
+
+    Ok(())
+}
+
+#[tauri::command]
+fn receive_purchase_order_item(
+    app: AppHandle,
+    receipt_id: String,
+    purchase_order_item_id: String,
+    quantity_received: f64,
+    receipt_date: String,
+    notes: String,
+) -> Result<PurchaseOrderReceipt, String> {
+    if receipt_id.trim().is_empty() {
+        return Err("Receipt ID is required.".into());
+    }
+
+    if purchase_order_item_id.trim().is_empty() {
+        return Err("Purchase order item is required.".into());
+    }
+
+    if !quantity_received.is_finite() || quantity_received <= 0.0 {
+        return Err("Received quantity must be greater than zero.".into());
+    }
+
+    if receipt_date.trim().is_empty() {
+        return Err("Receipt date is required.".into());
+    }
+
+    let mut connection = database_connection(&app)?;
+
+    let transaction = connection
+        .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+        .map_err(|e| e.to_string())?;
+
+    // Load the purchase order line and its current status.
+    let item = transaction
+        .query_row(
+            "SELECT
+                i.purchase_order_id,
+                i.material_id,
+                m.name,
+                i.ordered_quantity,
+                i.received_quantity,
+                p.status,
+                p.po_number
+             FROM purchase_order_items i
+             INNER JOIN materials m ON m.id = i.material_id
+             INNER JOIN purchase_orders p
+                ON p.id = i.purchase_order_id
+             WHERE i.id = ?1",
+            params![purchase_order_item_id.trim()],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, f64>(3)?,
+                    row.get::<_, f64>(4)?,
+                    row.get::<_, String>(5)?,
+                    row.get::<_, String>(6)?,
+                ))
+            },
+        )
+        .map_err(|_| "Purchase order item was not found.".to_string())?;
+
+    let (
+        purchase_order_id,
+        material_id,
+        material_name,
+        ordered_quantity,
+        already_received,
+        current_status,
+        po_number,
+    ) = item;
+
+    if current_status != "Pending"
+        && current_status != "Ordered"
+        && current_status != "Partially Received"
+    {
+        return Err(
+            "Only Pending, Ordered or Partially Received orders can receive materials.".into(),
+        );
+    }
+
+    let remaining = ordered_quantity - already_received;
+
+    if quantity_received > remaining + 0.0000001 {
+        return Err(format!(
+            "Received quantity exceeds the remaining quantity. Remaining: {remaining}"
+        ));
+    }
+
+    // Use a caller-generated unique ID. Reusing it is rejected by the
+    // primary key / unique constraints, preventing duplicate retries.
+    let receipt_id = receipt_id.trim().to_string();
+    let inventory_transaction_id = format!("INV-{receipt_id}");
+
+    let reference = format!("PO: {po_number}");
+    let inventory_notes = if notes.trim().is_empty() {
+        format!("Material received against purchase order {po_number}")
+    } else {
+        format!("PO receipt: {}", notes.trim())
+    };
+
+    // Update the ordered line only if the new total stays within its limit.
+    let updated = transaction
+        .execute(
+            "UPDATE purchase_order_items
+             SET received_quantity = received_quantity + ?1
+             WHERE id = ?2
+               AND received_quantity + ?1 <= ordered_quantity + 0.0000001",
+            params![quantity_received, purchase_order_item_id.trim()],
+        )
+        .map_err(|e| e.to_string())?;
+
+    if updated != 1 {
+        return Err("Could not update received quantity. Please refresh and try again.".into());
+    }
+
+    // Insert the inventory Stock In transaction in the same SQLite transaction.
+    transaction
+        .execute(
+            "INSERT INTO inventory_transactions (
+                id,
+                material_id,
+                transaction_type,
+                quantity_change,
+                transaction_date,
+                reference,
+                notes
+             )
+             VALUES (?1, ?2, 'Stock In', ?3, ?4, ?5, ?6)",
+            params![
+                inventory_transaction_id,
+                material_id,
+                quantity_received,
+                receipt_date.trim(),
+                reference,
+                inventory_notes
+            ],
+        )
+        .map_err(|e| {
+            if e.to_string().contains("UNIQUE") {
+                "This receipt has already been processed.".to_string()
+            } else {
+                e.to_string()
+            }
+        })?;
+
+    // Record the receipt linked to its inventory transaction.
+    transaction
+        .execute(
+            "INSERT INTO purchase_order_receipts (
+                id,
+                purchase_order_item_id,
+                quantity_received,
+                receipt_date,
+                inventory_transaction_id,
+                notes
+             )
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![
+                receipt_id,
+                purchase_order_item_id.trim(),
+                quantity_received,
+                receipt_date.trim(),
+                inventory_transaction_id,
+                notes.trim()
+            ],
+        )
+        .map_err(|e| {
+            if e.to_string().contains("UNIQUE") {
+                "This receipt has already been processed.".to_string()
+            } else {
+                e.to_string()
+            }
+        })?;
+
+    // Recalculate the PO status from all its line items.
+    let has_remaining_items: bool = transaction
+        .query_row(
+            "SELECT EXISTS(
+                SELECT 1
+                FROM purchase_order_items
+                WHERE purchase_order_id = ?1
+                  AND received_quantity < ordered_quantity - 0.0000001
+             )",
+            params![purchase_order_id],
+            |row| row.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+
+    let new_status = if has_remaining_items {
+        "Partially Received"
+    } else {
+        "Received"
+    };
+
+    transaction
+        .execute(
+            "UPDATE purchase_orders SET status = ?1 WHERE id = ?2",
+            params![new_status, purchase_order_id],
+        )
+        .map_err(|e| e.to_string())?;
+
+    let saved = transaction
+        .query_row(
+            "SELECT
+                r.id,
+                r.purchase_order_item_id,
+                i.material_id,
+                m.name,
+                r.quantity_received,
+                r.receipt_date,
+                r.inventory_transaction_id,
+                r.notes,
+                r.created_at
+             FROM purchase_order_receipts r
+             INNER JOIN purchase_order_items i
+                ON i.id = r.purchase_order_item_id
+             INNER JOIN materials m ON m.id = i.material_id
+             WHERE r.id = ?1",
+            params![receipt_id],
+            |row| {
+                Ok(PurchaseOrderReceipt {
+                    id: row.get(0)?,
+                    purchase_order_item_id: row.get(1)?,
+                    material_id: row.get(2)?,
+                    material_name: row.get(3)?,
+                    quantity_received: row.get(4)?,
+                    receipt_date: row.get(5)?,
+                    inventory_transaction_id: row.get(6)?,
+                    notes: row.get(7)?,
+                    created_at: row.get(8)?,
+                })
+            },
+        )
+        .map_err(|e| e.to_string())?;
+
+    transaction.commit().map_err(|e| e.to_string())?;
+
+    let _ = material_name;
+
+    Ok(saved)
+}
+#[tauri::command]
 fn list_suppliers(app: AppHandle) -> Result<Vec<Supplier>, String> {
     let connection = database_connection(&app)?;
 
@@ -534,7 +1251,6 @@ fn list_suppliers(app: AppHandle) -> Result<Vec<Supplier>, String> {
     Ok(suppliers)
 }
 
-
 // Create a new supplier.
 #[tauri::command]
 fn create_supplier(
@@ -557,20 +1273,22 @@ fn create_supplier(
         .map_err(|e| e.to_string())?
         .as_millis();
 
-    connection.execute(
-        "INSERT INTO suppliers
+    connection
+        .execute(
+            "INSERT INTO suppliers
             (id, name, contact_person, phone, email, address, notes)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-        params![
-            format!("SUP-{timestamp}"),
-            name.trim(),
-            contact_person.trim(),
-            phone.trim(),
-            email.trim(),
-            address.trim(),
-            notes.trim()
-        ],
-    ).map_err(|e| e.to_string())?;
+            params![
+                format!("SUP-{timestamp}"),
+                name.trim(),
+                contact_person.trim(),
+                phone.trim(),
+                email.trim(),
+                address.trim(),
+                notes.trim()
+            ],
+        )
+        .map_err(|e| e.to_string())?;
 
     Ok(())
 }
@@ -593,21 +1311,23 @@ fn update_supplier(
 
     let connection = database_connection(&app)?;
 
-    let changed = connection.execute(
-        "UPDATE suppliers
+    let changed = connection
+        .execute(
+            "UPDATE suppliers
          SET name = ?1, contact_person = ?2, phone = ?3,
              email = ?4, address = ?5, notes = ?6
          WHERE id = ?7",
-        params![
-            name.trim(),
-            contact_person.trim(),
-            phone.trim(),
-            email.trim(),
-            address.trim(),
-            notes.trim(),
-            id
-        ],
-    ).map_err(|e| e.to_string())?;
+            params![
+                name.trim(),
+                contact_person.trim(),
+                phone.trim(),
+                email.trim(),
+                address.trim(),
+                notes.trim(),
+                id
+            ],
+        )
+        .map_err(|e| e.to_string())?;
 
     if changed == 0 {
         return Err("Supplier not found.".into());
@@ -621,10 +1341,9 @@ fn update_supplier(
 fn delete_supplier(app: AppHandle, id: String) -> Result<(), String> {
     let connection = database_connection(&app)?;
 
-    let changed = connection.execute(
-        "DELETE FROM suppliers WHERE id = ?1",
-        params![id],
-    ).map_err(|e| e.to_string())?;
+    let changed = connection
+        .execute("DELETE FROM suppliers WHERE id = ?1", params![id])
+        .map_err(|e| e.to_string())?;
 
     if changed == 0 {
         return Err("Supplier not found.".into());
@@ -647,15 +1366,11 @@ fn create_material(
         || category.trim().is_empty()
         || unit.trim().is_empty()
     {
-        return Err(
-            "SKU, name, category and unit are required.".into(),
-        );
+        return Err("SKU, name, category and unit are required.".into());
     }
 
     if !minimum_stock.is_finite() || minimum_stock < 0.0 {
-        return Err(
-            "Minimum stock must be a valid non-negative number.".into(),
-        );
+        return Err("Minimum stock must be a valid non-negative number.".into());
     }
 
     let connection = database_connection(&app)?;
@@ -706,8 +1421,6 @@ fn create_material(
 
     Ok(saved)
 }
-
-
 
 // Update an existing material.
 #[tauri::command]
@@ -811,14 +1524,9 @@ fn delete_material(app: AppHandle, id: String) -> Result<(), String> {
     let connection = database_connection(&app)?;
 
     let changed = connection
-        .execute(
-            "DELETE FROM materials WHERE id = ?1",
-            params![id.trim()],
-        )
+        .execute("DELETE FROM materials WHERE id = ?1", params![id.trim()])
         .map_err(|e| {
-            format!(
-                "Could not delete material. It may have inventory history. Details: {e}"
-            )
+            format!("Could not delete material. It may have inventory history. Details: {e}")
         })?;
 
     if changed == 0 {
@@ -830,9 +1538,7 @@ fn delete_material(app: AppHandle, id: String) -> Result<(), String> {
 
 // List inventory transaction history.
 #[tauri::command]
-fn list_inventory_transactions(
-    app: AppHandle,
-) -> Result<Vec<InventoryTransaction>, String> {
+fn list_inventory_transactions(app: AppHandle) -> Result<Vec<InventoryTransaction>, String> {
     let connection = database_connection(&app)?;
 
     let mut statement = connection
@@ -925,9 +1631,7 @@ fn create_inventory_transaction(
     let mut connection = database_connection(&app)?;
 
     let transaction = connection
-        .transaction_with_behavior(
-            rusqlite::TransactionBehavior::Immediate,
-        )
+        .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
         .map_err(|e| e.to_string())?;
 
     let material_exists: bool = transaction
@@ -957,9 +1661,7 @@ fn create_inventory_transaction(
     let new_stock = current_stock + quantity_change;
 
     if new_stock < -0.0000001 {
-        return Err(format!(
-            "Insufficient stock. Available: {current_stock}"
-        ));
+        return Err(format!("Insufficient stock. Available: {current_stock}"));
     }
 
     let timestamp = SystemTime::now()
@@ -1033,9 +1735,7 @@ fn create_inventory_transaction(
 }
 // List all production history entries.
 #[tauri::command]
-fn list_production_entries(
-    app: AppHandle,
-) -> Result<Vec<ProductionEntry>, String> {
+fn list_production_entries(app: AppHandle) -> Result<Vec<ProductionEntry>, String> {
     let connection = database_connection(&app)?;
 
     let mut statement = connection
@@ -1057,7 +1757,6 @@ fn list_production_entries(
                 production_date: row.get(4)?,
                 notes: row.get(5)?,
                 created_at: row.get(6)?,
-
             })
         })
         .map_err(|e| e.to_string())?;
@@ -1089,13 +1788,7 @@ fn create_production_entry(
 
     let connection = database_connection(&app)?;
 
-    validate_production_quantity(
-        &connection,
-        &order_id,
-        &stage,
-        completed_quantity,
-        None,
-    )?;
+    validate_production_quantity(&connection, &order_id, &stage, completed_quantity, None)?;
 
     let timestamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -1197,17 +1890,11 @@ fn update_production_entry(
 
 // Delete a production history entry.
 #[tauri::command]
-fn delete_production_entry(
-    app: AppHandle,
-    id: String,
-) -> Result<(), String> {
+fn delete_production_entry(app: AppHandle, id: String) -> Result<(), String> {
     let connection = database_connection(&app)?;
 
     let changed = connection
-        .execute(
-            "DELETE FROM production_entries WHERE id = ?1",
-            params![id],
-        )
+        .execute("DELETE FROM production_entries WHERE id = ?1", params![id])
         .map_err(|e| e.to_string())?;
 
     if changed == 0 {
@@ -1222,30 +1909,35 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
-            initialize_database(&app.handle())
-                .map_err(std::io::Error::other)?;
+            initialize_database(&app.handle()).map_err(std::io::Error::other)?;
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-    list_orders,
-    create_order,
-    update_order,
-    delete_order,
-    list_materials,
-    list_suppliers,
-    create_supplier,
-    update_supplier,
-    delete_supplier,
-    create_material,
-    update_material,
-    delete_material,
-    list_inventory_transactions,
-    create_inventory_transaction,
-    list_production_entries,
-    create_production_entry,
-    update_production_entry,
-    delete_production_entry
-])
+            list_orders,
+            create_order,
+            update_order,
+            delete_order,
+            list_materials,
+            list_purchase_order_items,
+            list_purchase_order_receipts,
+            update_purchase_order_status,
+            receive_purchase_order_item,
+            list_purchase_orders,
+            create_purchase_order,
+            list_suppliers,
+            create_supplier,
+            update_supplier,
+            delete_supplier,
+            create_material,
+            update_material,
+            delete_material,
+            list_inventory_transactions,
+            create_inventory_transaction,
+            list_production_entries,
+            create_production_entry,
+            update_production_entry,
+            delete_production_entry
+        ])
         .run(tauri::generate_context!())
         .expect("error while running OrderFit");
 }

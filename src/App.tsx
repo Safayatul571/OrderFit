@@ -38,6 +38,7 @@ import Production from "./Production";
 import Materials from "./Materials";
 import InventoryTransactions from "./InventoryTransactions";
 import Suppliers from "./Suppliers";
+import PurchaseOrders from "./PurchaseOrders";
 import "./App.css";
 
 type PageKey =
@@ -49,6 +50,7 @@ type PageKey =
   | "Machines"
   | "Materials"
   | "Suppliers"
+  | "Purchase Orders"
   | "Inventory"
   | "Planning"
   | "Reports"
@@ -94,6 +96,7 @@ const navGroups = [
       { name: "Machines" as PageKey, icon: Wrench },
       { name: "Materials" as PageKey, icon: Boxes },
       { name: "Suppliers" as PageKey, icon: Users },
+      { name: "Purchase Orders" as PageKey, icon: ClipboardList },
       { name: "Inventory" as PageKey, icon: Truck },
     ],
   },
@@ -356,6 +359,7 @@ const loadProductionEntries = async () => {
     Machines: "Track machine availability and maintenance status.",
     Materials: "Monitor inventory levels and material requirements.",
     Suppliers: "Manage supplier profiles and material sourcing contacts.",
+    "Purchase Orders": "Create supplier orders, receive materials and track procurement.",
     Inventory: "Record stock movements and review inventory transaction history.",
     Reports: "Review operational performance and business summaries.",
     Settings: "Configure your OrderFit workspace.",
@@ -1036,6 +1040,8 @@ const atRiskCount = dashboardStats.atRiskCount;
             <Materials />
           ) : page === "Suppliers" ? (
             <Suppliers />
+          ) : page === "Purchase Orders" ? (
+            <PurchaseOrders />
           ) : page === "Inventory" ? (
             <InventoryTransactions />
           ) : (

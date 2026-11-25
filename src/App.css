@@ -1786,3 +1786,82 @@
   .materials-form-full { grid-column: auto; }
 }
 
+
+/* ==========================================
+   PURCHASE ORDERS
+   ========================================== */
+.po-module { gap: 16px; }
+.po-value { font-size: 19px !important; }
+.po-filter-tabs { flex-wrap: wrap; justify-content: flex-end; }
+.po-filter-tabs button { white-space: nowrap; }
+.po-selected-row { background: #faf9ff; }
+.po-status {
+  display: inline-flex; align-items: center; padding: 5px 8px;
+  border-radius: 5px; font-size: 9px; font-weight: 700;
+  background: #f0edff; color: #705cdd; white-space: nowrap;
+}
+.po-status.pending { background: #fff4e7; color: #c58a42; }
+.po-status.ordered { background: #eaf3ff; color: #5b91dc; }
+.po-status.partially-received { background: #fff1e8; color: #d18b52; }
+.po-status.received { background: #eaf7f0; color: #4b9c72; }
+.po-status.cancelled { background: #f3f3f6; color: #9295a2; }
+.po-status.draft { background: #f0edff; color: #705cdd; }
+.po-detail-panel { display: flex; flex-direction: column; gap: 15px; }
+.po-detail-meta { display: flex; flex-wrap: wrap; gap: 12px; }
+.po-detail-meta > div {
+  display: flex; align-items: center; gap: 8px; padding: 11px 13px;
+  border: 1px solid #eff0f5; border-radius: 8px; color: #858a9c;
+  font-size: 10px; min-width: 190px;
+}
+.po-detail-meta strong { color: #41465b; margin-left: auto; }
+.po-notes { margin: 0; color: #858a9c; font-size: 10px; }
+.po-action-row { display: flex; flex-wrap: wrap; gap: 8px; }
+.po-cancel-button { color: #c87970; }
+.po-subheading { margin-top: 8px; }
+.po-sku { display: block; color: #a0a4b2; font-size: 9px; margin-top: 3px; }
+.po-receive-button { height: 29px; font-size: 9px; padding: 0 9px; }
+.po-complete-label { color: #4b9c72; font-size: 9px; font-weight: 700; }
+.po-inventory-ref { color: #6854d9; font-size: 9px; font-weight: 700; }
+.po-empty-history { padding: 20px; text-align: center; color: #9a9eae; font-size: 10px; background: #fafbfc; border-radius: 8px; }
+.po-create-modal { width: min(760px, 100%); max-height: 90vh; overflow-y: auto; }
+.po-receive-modal { width: min(520px, 100%); max-height: 90vh; overflow-y: auto; }
+.po-line-heading { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 5px; }
+.po-line-heading > div { display: flex; flex-direction: column; gap: 4px; }
+.po-line-heading strong { color: #454a60; font-size: 11px; }
+.po-line-heading span { color: #969bad; font-size: 9px; }
+.po-draft-lines { display: flex; flex-direction: column; gap: 9px; }
+.po-draft-line {
+  display: grid; grid-template-columns: minmax(180px, 2fr) 1fr 1fr 28px;
+  align-items: end; gap: 9px; padding: 11px; background: #fafbfe;
+  border: 1px solid #eff0f5; border-radius: 8px;
+}
+.po-draft-line label { display: flex; flex-direction: column; gap: 6px; color: #54596d; font-size: 9px; font-weight: 700; }
+.po-draft-line input, .po-draft-line select {
+  width: 100%; height: 35px; min-width: 0; border: 1px solid #e7e9f0;
+  border-radius: 6px; padding: 0 8px; background: white; color: #454a60; font-size: 10px;
+}
+.po-remove-line { margin-bottom: 3px; color: #c87970; }
+.po-total-row {
+  display: flex; justify-content: space-between; align-items: center;
+  border-top: 1px solid #eff0f5; padding-top: 13px; color: #858a9c; font-size: 11px;
+}
+.po-total-row strong { color: #34394f; font: 800 17px Manrope, sans-serif; }
+.po-receive-summary { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.po-receive-summary > div {
+  display: flex; flex-direction: column; gap: 6px; padding: 11px;
+  border: 1px solid #eff0f5; border-radius: 8px;
+}
+.po-receive-summary span { color: #969bad; font-size: 9px; }
+.po-receive-summary strong { color: #41465b; font-size: 12px; }
+.po-stock-notice {
+  display: flex; align-items: center; gap: 7px; margin: 0;
+  padding: 10px; border-radius: 7px; background: #eef8f2;
+  color: #4b946e; font-size: 9px; line-height: 1.5;
+}
+@media (max-width: 700px) {
+  .po-draft-line { grid-template-columns: 1fr 1fr; }
+  .po-draft-line label:first-child { grid-column: 1 / -1; }
+  .po-remove-line { justify-self: end; }
+  .po-receive-summary { grid-template-columns: 1fr; }
+  .po-filter-tabs { justify-content: flex-start; }
+}
