@@ -1865,3 +1865,180 @@
   .po-receive-summary { grid-template-columns: 1fr; }
   .po-filter-tabs { justify-content: flex-start; }
 }
+/* ==========================================
+   PLANNING MODULE
+   ========================================== */
+
+.planning-module {
+  min-width: 0;
+}
+
+.planning-error {
+  margin: 14px 0;
+  padding: 12px 15px;
+  border: 1px solid rgba(220, 70, 70, 0.25);
+  border-radius: 10px;
+  background: rgba(220, 70, 70, 0.07);
+  color: #c84b4b;
+  font-size: 13px;
+}
+
+.planning-kpis {
+  margin-bottom: 20px;
+}
+
+.planning-overview {
+  margin-bottom: 20px;
+}
+
+.planning-overview-values {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  margin-top: 15px;
+  flex-wrap: wrap;
+}
+
+.planning-overview-values > div {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.planning-overview-values strong {
+  font-size: 20px;
+  font-weight: 700;
+}
+
+.planning-overview-values span {
+  color: var(--text-muted, #89909e);
+  font-size: 12px;
+}
+
+.planning-overview-track {
+  margin-top: 15px;
+}
+
+.planning-schedule-section {
+  min-width: 0;
+}
+
+.planning-toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin: 16px 0;
+}
+
+.planning-table-wrap {
+  overflow-x: auto;
+}
+
+.planning-order-cell,
+.planning-quantity,
+.planning-date-cell,
+.planning-progress-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.planning-order-cell strong,
+.planning-quantity {
+  font-weight: 650;
+}
+
+.planning-order-cell small,
+.planning-muted,
+.planning-date-cell small {
+  color: var(--text-muted, #89909e);
+  font-size: 11px;
+}
+
+.planning-progress-cell {
+  min-width: 90px;
+}
+
+.planning-progress-copy {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.planning-status {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: fit-content;
+  padding: 5px 9px;
+  border-radius: 20px;
+  font-size: 11px;
+  font-weight: 650;
+  white-space: nowrap;
+  background: rgba(130, 140, 155, 0.12);
+  color: var(--text-secondary, #778091);
+}
+
+.planning-status.planned {
+  background: rgba(112, 123, 145, 0.12);
+  color: #788398;
+}
+
+.planning-status.in-progress {
+  background: rgba(72, 132, 225, 0.12);
+  color: #4d86d9;
+}
+
+.planning-status.completed {
+  background: rgba(45, 170, 115, 0.12);
+  color: #299d70;
+}
+
+.planning-status.delayed {
+  background: rgba(225, 145, 55, 0.13);
+  color: #d18a32;
+}
+
+.planning-modal {
+  max-width: 650px;
+}
+
+.planning-order-info {
+  padding: 12px 14px;
+  margin-bottom: 16px;
+  border-radius: 10px;
+  background: var(--surface-secondary, rgba(130, 140, 155, 0.08));
+  font-size: 12px;
+  color: var(--text-secondary, #778091);
+}
+
+.planning-form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.planning-delete-summary {
+  margin: 15px 0;
+  padding: 14px;
+  border-radius: 10px;
+  background: var(--surface-secondary, rgba(130, 140, 155, 0.08));
+}
+
+@media (max-width: 700px) {
+  .planning-form-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .planning-toolbar {
+    align-items: stretch;
+  }
+
+  .planning-overview-values {
+    gap: 12px;
+  }
+}

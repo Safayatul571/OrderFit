@@ -26,6 +26,22 @@ struct ProductionEntry {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+struct ProductionSchedule {
+    id: String,
+    order_id: String,
+    buyer: String,
+    product: String,
+    order_quantity: String,
+    stage: String,
+    planned_quantity: i64,
+    actual_quantity: i64,
+    start_date: String,
+    target_date: String,
+    status: String,
+    notes: String,
+    created_at: String,
+}
+#[derive(Debug, Serialize, Deserialize)]
 struct Material {
     id: String,
     sku: String,
@@ -311,6 +327,32 @@ fn initialize_database(app: &AppHandle) -> Result<(), String> {
 
             CREATE INDEX IF NOT EXISTS idx_purchase_order_receipts_item
                 ON purchase_order_receipts(purchase_order_item_id);",
+        )
+        .map_err(|e| e.to_string())?;
+    connection
+        .execute_batch(
+            "CREATE TABLE IF NOT EXISTS production_schedules (
+                id TEXT PRIMARY KEY,
+                order_id TEXT NOT NULL,
+                stage TEXT NOT NULL
+                    CHECK(stage IN ('Cutting', 'Sewing', 'Finishing', 'QC')),
+                planned_quantity INTEGER NOT NULL CHECK(planned_quantity > 0),
+                start_date TEXT NOT NULL,
+                target_date TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'Planned'
+                    CHECK(status IN ('Planned', 'In Progress', 'Completed', 'Delayed')),
+                notes TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY(order_id) REFERENCES orders(id) ON DELETE CASCADE,
+                UNIQUE(order_id, stage)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_production_schedules_order
+                ON production_schedules(order_id);
+            CREATE INDEX IF NOT EXISTS idx_production_schedules_dates
+                ON production_schedules(start_date, target_date);
+            CREATE INDEX IF NOT EXISTS idx_production_schedules_status
+                ON production_schedules(status);",
         )
         .map_err(|e| e.to_string())?;
     Ok(())
@@ -1904,6 +1946,250 @@ fn delete_production_entry(app: AppHandle, id: String) -> Result<(), String> {
     Ok(())
 }
 
+fn is_valid_schedule_date(value: &str) -> bool {
+    let parts: Vec<&str> = value.split('-').collect();
+
+    if parts.len() != 3 || parts[0].len() != 4 || parts[1].len() != 2 || parts[2].len() != 2 {
+        return false;
+    }
+
+    let year = match parts[0].parse::<i32>() {
+        Ok(value) => value,
+        Err(_) => return false,
+    };
+
+    let month = match parts[1].parse::<u32>() {
+        Ok(value) => value,
+        Err(_) => return false,
+    };
+
+    let day = match parts[2].parse::<u32>() {
+        Ok(value) => value,
+        Err(_) => return false,
+    };
+
+    let leap_year = year % 400 == 0 || (year % 4 == 0 && year % 100 != 0);
+
+    let days_in_month = match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 if leap_year => 29,
+        2 => 28,
+        _ => return false,
+    };
+
+    day >= 1 && day <= days_in_month
+}
+
+fn validate_schedule(
+    stage: &str,
+    planned_quantity: i64,
+    start_date: &str,
+    target_date: &str,
+    status: &str,
+) -> Result<(), String> {
+    validate_production_stage(stage)?;
+
+    if planned_quantity <= 0 {
+        return Err("Planned quantity must be greater than zero.".into());
+    }
+
+    let start = start_date.trim();
+    let target = target_date.trim();
+
+    if !is_valid_schedule_date(start) {
+        return Err("Invalid start date. Use a valid YYYY-MM-DD date.".into());
+    }
+
+    if !is_valid_schedule_date(target) {
+        return Err("Invalid target date. Use a valid YYYY-MM-DD date.".into());
+    }
+
+    if target < start {
+        return Err("Target date cannot be earlier than start date.".into());
+    }
+
+    if !["Planned", "In Progress", "Completed", "Delayed"].contains(&status) {
+        return Err("Invalid schedule status.".into());
+    }
+
+    Ok(())
+}
+#[tauri::command]
+fn list_production_schedules(app: AppHandle) -> Result<Vec<ProductionSchedule>, String> {
+    let connection = database_connection(&app)?;
+
+    let mut statement = connection
+        .prepare(
+            "SELECT s.id, s.order_id, o.buyer, o.product, o.quantity,
+                s.stage, s.planned_quantity,
+                COALESCE((
+                    SELECT SUM(p.completed_quantity)
+                    FROM production_entries p
+                    WHERE p.order_id = s.order_id AND p.stage = s.stage
+                ), 0),
+                s.start_date, s.target_date, s.status, s.notes, s.created_at
+         FROM production_schedules s
+         JOIN orders o ON o.id = s.order_id
+         ORDER BY s.start_date ASC, s.created_at DESC",
+        )
+        .map_err(|e| e.to_string())?;
+
+    let rows = statement
+        .query_map([], |row| {
+            Ok(ProductionSchedule {
+                id: row.get(0)?,
+                order_id: row.get(1)?,
+                buyer: row.get(2)?,
+                product: row.get(3)?,
+                order_quantity: row.get(4)?,
+                stage: row.get(5)?,
+                planned_quantity: row.get(6)?,
+                actual_quantity: row.get(7)?,
+                start_date: row.get(8)?,
+                target_date: row.get(9)?,
+                status: row.get(10)?,
+                notes: row.get(11)?,
+                created_at: row.get(12)?,
+            })
+        })
+        .map_err(|e| e.to_string())?;
+
+    let mut schedules = Vec::new();
+
+    for row in rows {
+        schedules.push(row.map_err(|e| e.to_string())?);
+    }
+
+    Ok(schedules)
+}
+
+#[tauri::command]
+fn create_production_schedule(
+    app: AppHandle,
+    order_id: String,
+    stage: String,
+    planned_quantity: i64,
+    start_date: String,
+    target_date: String,
+    status: String,
+    notes: String,
+) -> Result<(), String> {
+    validate_schedule(&stage, planned_quantity, &start_date, &target_date, &status)?;
+
+    let connection = database_connection(&app)?;
+
+    let exists: bool = connection
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM orders WHERE id = ?1)",
+            params![order_id],
+            |row| row.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+
+    if !exists {
+        return Err("Selected order was not found.".into());
+    }
+
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|e| e.to_string())?
+        .as_nanos();
+
+    let id = format!("SCHED-{timestamp}");
+
+    connection
+        .execute(
+            "INSERT INTO production_schedules
+         (id, order_id, stage, planned_quantity, start_date, target_date, status, notes)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![
+                id,
+                order_id,
+                stage,
+                planned_quantity,
+                start_date.trim(),
+                target_date.trim(),
+                status,
+                notes.trim()
+            ],
+        )
+        .map_err(|e| {
+            if e.to_string().contains("UNIQUE constraint failed") {
+                "A schedule already exists for this order and stage.".to_string()
+            } else {
+                e.to_string()
+            }
+        })?;
+
+    Ok(())
+}
+
+#[tauri::command]
+fn update_production_schedule(
+    app: AppHandle,
+    id: String,
+    order_id: String,
+    stage: String,
+    planned_quantity: i64,
+    start_date: String,
+    target_date: String,
+    status: String,
+    notes: String,
+) -> Result<(), String> {
+    validate_schedule(&stage, planned_quantity, &start_date, &target_date, &status)?;
+
+    let connection = database_connection(&app)?;
+
+    let changed = connection
+        .execute(
+            "UPDATE production_schedules
+         SET order_id = ?1, stage = ?2, planned_quantity = ?3,
+             start_date = ?4, target_date = ?5, status = ?6, notes = ?7
+         WHERE id = ?8",
+            params![
+                order_id,
+                stage,
+                planned_quantity,
+                start_date.trim(),
+                target_date.trim(),
+                status,
+                notes.trim(),
+                id
+            ],
+        )
+        .map_err(|e| {
+            if e.to_string().contains("UNIQUE constraint failed") {
+                "A schedule already exists for this order and stage.".to_string()
+            } else {
+                e.to_string()
+            }
+        })?;
+
+    if changed == 0 {
+        return Err("Production schedule not found.".into());
+    }
+
+    Ok(())
+}
+
+#[tauri::command]
+fn delete_production_schedule(app: AppHandle, id: String) -> Result<(), String> {
+    let connection = database_connection(&app)?;
+
+    let changed = connection
+        .execute(
+            "DELETE FROM production_schedules WHERE id = ?1",
+            params![id],
+        )
+        .map_err(|e| e.to_string())?;
+
+    if changed == 0 {
+        return Err("Production schedule not found.".into());
+    }
+
+    Ok(())
+}
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -1936,7 +2222,11 @@ pub fn run() {
             list_production_entries,
             create_production_entry,
             update_production_entry,
-            delete_production_entry
+            delete_production_entry,
+            list_production_schedules,
+            create_production_schedule,
+            update_production_schedule,
+            delete_production_schedule
         ])
         .run(tauri::generate_context!())
         .expect("error while running OrderFit");
