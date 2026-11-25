@@ -2168,3 +2168,230 @@
   }
 }
 
+
+/* ==================================================
+   MACHINES MANAGEMENT
+   ================================================== */
+
+.machines-detail-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.machines-detail-cell strong {
+  color: #42475c;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.machines-detail-cell small {
+  color: #989dad;
+  font-size: 9px;
+}
+
+.machines-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 7px;
+  border-radius: 5px;
+  font-size: 8px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.machines-status i {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.machines-status.active {
+  background: #eaf6ef;
+  color: #4b9c72;
+}
+
+.machines-status.idle {
+  background: #fff3e5;
+  color: #ca8a43;
+}
+
+.machines-status.maintenance {
+  background: #f0edff;
+  color: #705cdd;
+}
+
+.machines-status.inactive {
+  background: #fff0ee;
+  color: #d87568;
+}
+
+.machines-modal {
+  width: min(680px, 100%);
+}
+
+.machines-maintenance-modal {
+  width: min(700px, 100%);
+}
+
+.machines-maintenance-summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin: 17px 0 20px;
+}
+
+.machines-maintenance-summary > div {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px;
+  background: #fafaff;
+  border: 1px solid #eceef5;
+  border-radius: 8px;
+  min-width: 0;
+}
+
+.machines-maintenance-summary small {
+  color: #9297a7;
+  font-size: 9px;
+}
+
+.machines-maintenance-summary strong {
+  color: #3c4158;
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
+.machines-history-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  margin: 10px 0 12px;
+}
+
+.machines-history-heading h3 {
+  margin: 0 0 4px;
+  color: #34394f;
+  font: 700 13px Manrope, sans-serif;
+}
+
+.machines-history-heading p {
+  margin: 0;
+  color: #9297a7;
+  font-size: 9px;
+}
+
+.machines-maintenance-form {
+  padding: 14px;
+  margin: 12px 0;
+  border: 1px solid #e9eaf2;
+  border-radius: 9px;
+  background: #fcfcff;
+}
+
+.machines-history-list {
+  display: flex;
+  flex-direction: column;
+  max-height: 330px;
+  overflow-y: auto;
+  border-top: 1px solid #eff0f5;
+}
+
+.machines-history-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 11px;
+  padding: 14px 2px;
+  border-bottom: 1px solid #eff0f5;
+}
+
+.machines-history-icon {
+  width: 30px;
+  height: 30px;
+  flex: 0 0 30px;
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+  background: #f0edff;
+  color: #705cdd;
+}
+
+.machines-history-content {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.machines-history-title {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+}
+
+.machines-history-title strong {
+  color: #41465b;
+  font-size: 10px;
+}
+
+.machines-history-title span {
+  color: #8d92a3;
+  font-size: 9px;
+  white-space: nowrap;
+}
+
+.machines-history-content p {
+  margin: 0;
+  color: #666b7d;
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+.machines-history-content small {
+  color: #969bad;
+  font-size: 9px;
+  line-height: 1.5;
+}
+
+.machines-empty-history {
+  min-height: 150px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: #a0a4b2;
+  text-align: center;
+}
+
+.machines-empty-history strong {
+  color: #555a70;
+  font-size: 11px;
+}
+
+.machines-empty-history span {
+  font-size: 9px;
+}
+
+@media (max-width: 700px) {
+  .machines-maintenance-summary {
+    grid-template-columns: 1fr;
+  }
+
+  .machines-history-heading {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .machines-modal,
+  .machines-maintenance-modal {
+    max-height: 92vh;
+  }
+}

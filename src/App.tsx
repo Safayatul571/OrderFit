@@ -1,4 +1,4 @@
-﻿
+
 import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useMemo, useState } from "react";
 import {
@@ -40,6 +40,7 @@ import Materials from "./Materials";
 import InventoryTransactions from "./InventoryTransactions";
 import Suppliers from "./Suppliers";
 import Workers from "./Workers";
+import Machines from "./Machines";
 import PurchaseOrders from "./PurchaseOrders";
 import "./App.css";
 
@@ -352,7 +353,7 @@ const loadProductionEntries = async () => {
   };
 
   const pageDescriptions: Record<PageKey, string> = {
-    Dashboard: "Hereâ€™s whatâ€™s happening across your factory today.",
+    Dashboard: "HereÃ¢â‚¬â„¢s whatÃ¢â‚¬â„¢s happening across your factory today.",
     Orders: "Manage buyer orders, delivery dates and fulfilment progress.",
     Production: "Monitor production output and stage-level progress.",
     Planning: "Coordinate capacity, schedules and production priorities.",
@@ -547,7 +548,7 @@ const atRiskCount = dashboardStats.atRiskCount;
                 placeholder="Search anything..."
               />
 
-              <kbd>âŒ˜ K</kbd>
+              <kbd>Ã¢Å’Ëœ K</kbd>
             </div>
 
             <div className="notification-wrap">
@@ -1000,7 +1001,7 @@ const atRiskCount = dashboardStats.atRiskCount;
                         <div className="attention-copy">
                           <strong>Order delivery at risk</strong>
                           <span>
-                            {order.buyer} Â· {order.id}
+                            {order.buyer} Ã‚Â· {order.id}
                           </span>
                           <small>{order.due}</small>
                         </div>
@@ -1042,6 +1043,8 @@ const atRiskCount = dashboardStats.atRiskCount;
             <Planning orders={orders} />
           ) : page === "Materials" ? (
             <Materials />
+          ) : page === "Machines" ? (
+            <Machines />
           ) : page === "Workers" ? (
             <Workers />
           ) : page === "Suppliers" ? (
@@ -1057,8 +1060,7 @@ const atRiskCount = dashboardStats.atRiskCount;
                   <ClipboardList />
                 ) : page === "Buyers" ? (
                   <Users />
-                ) : page === "Machines" ? (
-                  <Wrench />
+
                 ) : page === "Reports" ? (
                   <FileBarChart />
                 ) : (
@@ -1128,7 +1130,7 @@ const atRiskCount = dashboardStats.atRiskCount;
 
           <footer className="footer">
             <span>
-              Â© 2026 OrderFit. Manufacturing operations, made clearer.
+              Ã‚Â© 2026 OrderFit. Manufacturing operations, made clearer.
             </span>
 
             <span>
@@ -1136,7 +1138,7 @@ const atRiskCount = dashboardStats.atRiskCount;
               {databaseError
                 ? "Database connection issue"
                 : "Local workspace"}
-              <span className="footer-separator"> Â· </span>
+              <span className="footer-separator"> Ã‚Â· </span>
               SQLite
             </span>
           </footer>

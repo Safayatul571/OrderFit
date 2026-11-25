@@ -1,4 +1,4 @@
-﻿use rusqlite::{Connection, params};
+use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Manager};
@@ -54,6 +54,41 @@ struct Material {
     created_at: String,
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+struct Machine {
+    id: String,
+    machine_code: String,
+    name: String,
+    machine_type: String,
+    brand: String,
+    model: String,
+    department: String,
+    location: String,
+    capacity_per_hour: f64,
+    capacity_unit: String,
+    status: String,
+    purchase_date: String,
+    last_maintenance_date: String,
+    next_maintenance_date: String,
+    notes: String,
+    created_at: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct MachineMaintenance {
+    id: String,
+    machine_id: String,
+    machine_code: String,
+    machine_name: String,
+    service_date: String,
+    maintenance_type: String,
+    description: String,
+    cost: f64,
+    next_service_date: String,
+    performed_by: String,
+    notes: String,
+    created_at: String,
+}
 #[derive(Debug, Serialize, Deserialize)]
 struct Worker {
     id: String,
@@ -295,6 +330,62 @@ fn initialize_database(app: &AppHandle) -> Result<(), String> {
 
             CREATE INDEX IF NOT EXISTS idx_workers_department
                 ON workers(department);",
+        )
+        .map_err(|e| e.to_string())?;
+    // Machine registry and maintenance history.
+    connection
+        .execute_batch(
+            "CREATE TABLE IF NOT EXISTS machines (
+                id TEXT PRIMARY KEY,
+                machine_code TEXT NOT NULL COLLATE NOCASE UNIQUE,
+                name TEXT NOT NULL,
+                machine_type TEXT NOT NULL,
+                brand TEXT NOT NULL DEFAULT '',
+                model TEXT NOT NULL DEFAULT '',
+                department TEXT NOT NULL DEFAULT '',
+                location TEXT NOT NULL DEFAULT '',
+                capacity_per_hour REAL NOT NULL DEFAULT 0
+                    CHECK(capacity_per_hour >= 0),
+                capacity_unit TEXT NOT NULL DEFAULT 'pcs',
+                status TEXT NOT NULL DEFAULT 'Active'
+                    CHECK(status IN ('Active', 'Idle', 'Maintenance', 'Inactive')),
+                purchase_date TEXT NOT NULL DEFAULT '',
+                last_maintenance_date TEXT NOT NULL DEFAULT '',
+                next_maintenance_date TEXT NOT NULL DEFAULT '',
+                notes TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_machines_name
+                ON machines(name);
+
+            CREATE INDEX IF NOT EXISTS idx_machines_status
+                ON machines(status);
+
+            CREATE INDEX IF NOT EXISTS idx_machines_department
+                ON machines(department);
+
+            CREATE TABLE IF NOT EXISTS machine_maintenance (
+                id TEXT PRIMARY KEY,
+                machine_id TEXT NOT NULL,
+                service_date TEXT NOT NULL,
+                maintenance_type TEXT NOT NULL,
+                description TEXT NOT NULL DEFAULT '',
+                cost REAL NOT NULL DEFAULT 0 CHECK(cost >= 0),
+                next_service_date TEXT NOT NULL DEFAULT '',
+                performed_by TEXT NOT NULL DEFAULT '',
+                notes TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY(machine_id)
+                    REFERENCES machines(id)
+                    ON DELETE CASCADE
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_machine_maintenance_machine
+                ON machine_maintenance(machine_id);
+
+            CREATE INDEX IF NOT EXISTS idx_machine_maintenance_date
+                ON machine_maintenance(service_date);",
         )
         .map_err(|e| e.to_string())?;
     connection
@@ -1629,6 +1720,394 @@ fn delete_worker(app: AppHandle, id: String) -> Result<(), String> {
 
     Ok(())
 }
+
+// Machine management commands.
+#[tauri::command]
+fn list_machines(app: AppHandle) -> Result<Vec<Machine>, String> {
+    let connection = database_connection(&app)?;
+    let mut statement = connection
+        .prepare(
+            "SELECT id, machine_code, name, machine_type, brand, model,
+                    department, location, capacity_per_hour, capacity_unit,
+                    status, purchase_date, last_maintenance_date,
+                    next_maintenance_date, notes, created_at
+             FROM machines
+             ORDER BY name COLLATE NOCASE ASC",
+        )
+        .map_err(|e| e.to_string())?;
+
+    let rows = statement
+        .query_map([], |row| {
+            Ok(Machine {
+                id: row.get(0)?,
+                machine_code: row.get(1)?,
+                name: row.get(2)?,
+                machine_type: row.get(3)?,
+                brand: row.get(4)?,
+                model: row.get(5)?,
+                department: row.get(6)?,
+                location: row.get(7)?,
+                capacity_per_hour: row.get(8)?,
+                capacity_unit: row.get(9)?,
+                status: row.get(10)?,
+                purchase_date: row.get(11)?,
+                last_maintenance_date: row.get(12)?,
+                next_maintenance_date: row.get(13)?,
+                notes: row.get(14)?,
+                created_at: row.get(15)?,
+            })
+        })
+        .map_err(|e| e.to_string())?;
+
+    let mut machines = Vec::new();
+    for row in rows {
+        machines.push(row.map_err(|e| e.to_string())?);
+    }
+    Ok(machines)
+}
+
+#[tauri::command]
+fn create_machine(
+    app: AppHandle,
+    machine_code: String,
+    name: String,
+    machine_type: String,
+    brand: String,
+    model: String,
+    department: String,
+    location: String,
+    capacity_per_hour: f64,
+    capacity_unit: String,
+    status: String,
+    purchase_date: String,
+    last_maintenance_date: String,
+    next_maintenance_date: String,
+    notes: String,
+) -> Result<(), String> {
+    if machine_code.trim().is_empty() || name.trim().is_empty() || machine_type.trim().is_empty() {
+        return Err("Machine ID, name and machine type are required.".into());
+    }
+
+    if !capacity_per_hour.is_finite() || capacity_per_hour < 0.0 {
+        return Err("Capacity must be a valid non-negative number.".into());
+    }
+
+    if capacity_unit.trim().is_empty() {
+        return Err("Capacity unit is required.".into());
+    }
+
+    if !["Active", "Idle", "Maintenance", "Inactive"].contains(&status.as_str()) {
+        return Err("Invalid machine status.".into());
+    }
+
+    let connection = database_connection(&app)?;
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|e| e.to_string())?
+        .as_millis();
+
+    connection
+        .execute(
+            "INSERT INTO machines (
+                id, machine_code, name, machine_type, brand, model,
+                department, location, capacity_per_hour, capacity_unit,
+                status, purchase_date, last_maintenance_date,
+                next_maintenance_date, notes
+             ) VALUES (
+                ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10,
+                ?11, ?12, ?13, ?14, ?15
+             )",
+            params![
+                format!("MCH-{timestamp}"),
+                machine_code.trim(),
+                name.trim(),
+                machine_type.trim(),
+                brand.trim(),
+                model.trim(),
+                department.trim(),
+                location.trim(),
+                capacity_per_hour,
+                capacity_unit.trim(),
+                status,
+                purchase_date.trim(),
+                last_maintenance_date.trim(),
+                next_maintenance_date.trim(),
+                notes.trim()
+            ],
+        )
+        .map_err(|e| {
+            if e.to_string().contains("UNIQUE constraint failed") {
+                "This Machine ID already exists.".to_string()
+            } else {
+                e.to_string()
+            }
+        })?;
+
+    Ok(())
+}
+
+#[tauri::command]
+fn update_machine(
+    app: AppHandle,
+    id: String,
+    machine_code: String,
+    name: String,
+    machine_type: String,
+    brand: String,
+    model: String,
+    department: String,
+    location: String,
+    capacity_per_hour: f64,
+    capacity_unit: String,
+    status: String,
+    purchase_date: String,
+    last_maintenance_date: String,
+    next_maintenance_date: String,
+    notes: String,
+) -> Result<(), String> {
+    if id.trim().is_empty()
+        || machine_code.trim().is_empty()
+        || name.trim().is_empty()
+        || machine_type.trim().is_empty()
+    {
+        return Err("Machine ID, name and machine type are required.".into());
+    }
+
+    if !capacity_per_hour.is_finite() || capacity_per_hour < 0.0 {
+        return Err("Capacity must be a valid non-negative number.".into());
+    }
+
+    if capacity_unit.trim().is_empty() {
+        return Err("Capacity unit is required.".into());
+    }
+
+    if !["Active", "Idle", "Maintenance", "Inactive"].contains(&status.as_str()) {
+        return Err("Invalid machine status.".into());
+    }
+
+    let connection = database_connection(&app)?;
+    let changed = connection
+        .execute(
+            "UPDATE machines SET
+                machine_code = ?1,
+                name = ?2,
+                machine_type = ?3,
+                brand = ?4,
+                model = ?5,
+                department = ?6,
+                location = ?7,
+                capacity_per_hour = ?8,
+                capacity_unit = ?9,
+                status = ?10,
+                purchase_date = ?11,
+                last_maintenance_date = ?12,
+                next_maintenance_date = ?13,
+                notes = ?14
+             WHERE id = ?15",
+            params![
+                machine_code.trim(),
+                name.trim(),
+                machine_type.trim(),
+                brand.trim(),
+                model.trim(),
+                department.trim(),
+                location.trim(),
+                capacity_per_hour,
+                capacity_unit.trim(),
+                status,
+                purchase_date.trim(),
+                last_maintenance_date.trim(),
+                next_maintenance_date.trim(),
+                notes.trim(),
+                id.trim()
+            ],
+        )
+        .map_err(|e| {
+            if e.to_string().contains("UNIQUE constraint failed") {
+                "This Machine ID already exists.".to_string()
+            } else {
+                e.to_string()
+            }
+        })?;
+
+    if changed == 0 {
+        return Err("Machine not found.".into());
+    }
+
+    Ok(())
+}
+
+#[tauri::command]
+fn delete_machine(app: AppHandle, id: String) -> Result<(), String> {
+    let connection = database_connection(&app)?;
+    let changed = connection
+        .execute("DELETE FROM machines WHERE id = ?1", params![id.trim()])
+        .map_err(|e| e.to_string())?;
+
+    if changed == 0 {
+        return Err("Machine not found.".into());
+    }
+
+    Ok(())
+}
+
+#[tauri::command]
+fn list_machine_maintenance(
+    app: AppHandle,
+    machine_id: String,
+) -> Result<Vec<MachineMaintenance>, String> {
+    let connection = database_connection(&app)?;
+    let mut statement = connection
+        .prepare(
+            "SELECT mm.id, mm.machine_id, m.machine_code, m.name,
+                    mm.service_date, mm.maintenance_type, mm.description,
+                    mm.cost, mm.next_service_date, mm.performed_by,
+                    mm.notes, mm.created_at
+             FROM machine_maintenance mm
+             JOIN machines m ON m.id = mm.machine_id
+             WHERE mm.machine_id = ?1
+             ORDER BY mm.service_date DESC, mm.created_at DESC",
+        )
+        .map_err(|e| e.to_string())?;
+
+    let rows = statement
+        .query_map(params![machine_id.trim()], |row| {
+            Ok(MachineMaintenance {
+                id: row.get(0)?,
+                machine_id: row.get(1)?,
+                machine_code: row.get(2)?,
+                machine_name: row.get(3)?,
+                service_date: row.get(4)?,
+                maintenance_type: row.get(5)?,
+                description: row.get(6)?,
+                cost: row.get(7)?,
+                next_service_date: row.get(8)?,
+                performed_by: row.get(9)?,
+                notes: row.get(10)?,
+                created_at: row.get(11)?,
+            })
+        })
+        .map_err(|e| e.to_string())?;
+
+    let mut records = Vec::new();
+    for row in rows {
+        records.push(row.map_err(|e| e.to_string())?);
+    }
+    Ok(records)
+}
+
+#[tauri::command]
+fn create_machine_maintenance(
+    app: AppHandle,
+    machine_id: String,
+    service_date: String,
+    maintenance_type: String,
+    description: String,
+    cost: f64,
+    next_service_date: String,
+    performed_by: String,
+    notes: String,
+) -> Result<(), String> {
+    if machine_id.trim().is_empty()
+        || service_date.trim().is_empty()
+        || maintenance_type.trim().is_empty()
+    {
+        return Err("Machine, service date and maintenance type are required.".into());
+    }
+
+    if !cost.is_finite() || cost < 0.0 {
+        return Err("Maintenance cost must be a valid non-negative number.".into());
+    }
+
+    let connection = database_connection(&app)?;
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|e| e.to_string())?
+        .as_millis();
+    let record_id = format!("MNT-{timestamp}");
+
+    connection
+        .execute(
+            "INSERT INTO machine_maintenance (
+                id, machine_id, service_date, maintenance_type,
+                description, cost, next_service_date, performed_by, notes
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            params![
+                record_id,
+                machine_id.trim(),
+                service_date.trim(),
+                maintenance_type.trim(),
+                description.trim(),
+                cost,
+                next_service_date.trim(),
+                performed_by.trim(),
+                notes.trim()
+            ],
+        )
+        .map_err(|e| e.to_string())?;
+
+    connection
+        .execute(
+            "UPDATE machines
+             SET last_maintenance_date = CASE
+                    WHEN last_maintenance_date < ?1 THEN ?1
+                    ELSE last_maintenance_date
+                 END,
+                 next_maintenance_date = ?2
+             WHERE id = ?3",
+            params![
+                service_date.trim(),
+                next_service_date.trim(),
+                machine_id.trim()
+            ],
+        )
+        .map_err(|e| e.to_string())?;
+
+    Ok(())
+}
+
+#[tauri::command]
+fn delete_machine_maintenance(app: AppHandle, id: String) -> Result<(), String> {
+    let connection = database_connection(&app)?;
+
+    let machine_id: Option<String> = connection
+        .query_row(
+            "SELECT machine_id FROM machine_maintenance WHERE id = ?1",
+            params![id.trim()],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|e| e.to_string())?;
+
+    let machine_id = machine_id.ok_or_else(|| "Maintenance record not found.".to_string())?;
+
+    connection
+        .execute(
+            "DELETE FROM machine_maintenance WHERE id = ?1",
+            params![id.trim()],
+        )
+        .map_err(|e| e.to_string())?;
+
+    connection
+        .execute(
+            "UPDATE machines
+             SET last_maintenance_date = COALESCE(
+                    (SELECT service_date FROM machine_maintenance
+                     WHERE machine_id = ?1
+                     ORDER BY service_date DESC, created_at DESC LIMIT 1), ''
+                 ),
+                 next_maintenance_date = COALESCE(
+                    (SELECT next_service_date FROM machine_maintenance
+                     WHERE machine_id = ?1
+                     ORDER BY service_date DESC, created_at DESC LIMIT 1), ''
+                 )
+             WHERE id = ?1",
+            params![machine_id],
+        )
+        .map_err(|e| e.to_string())?;
+
+    Ok(())
+}
 #[tauri::command]
 fn create_material(
     app: AppHandle,
@@ -2453,6 +2932,13 @@ pub fn run() {
             list_workers,
             create_worker,
             update_worker,
+            list_machines,
+            create_machine,
+            update_machine,
+            delete_machine,
+            list_machine_maintenance,
+            create_machine_maintenance,
+            delete_machine_maintenance,
             delete_worker,
             create_material,
             update_material,
