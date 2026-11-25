@@ -36,6 +36,8 @@ import {
 
 import Production from "./Production";
 import Materials from "./Materials";
+import InventoryTransactions from "./InventoryTransactions";
+import Suppliers from "./Suppliers";
 import "./App.css";
 
 type PageKey =
@@ -46,6 +48,8 @@ type PageKey =
   | "Workers"
   | "Machines"
   | "Materials"
+  | "Suppliers"
+  | "Inventory"
   | "Planning"
   | "Reports"
   | "Settings";
@@ -89,6 +93,8 @@ const navGroups = [
       { name: "Workers" as PageKey, icon: ShieldCheck },
       { name: "Machines" as PageKey, icon: Wrench },
       { name: "Materials" as PageKey, icon: Boxes },
+      { name: "Suppliers" as PageKey, icon: Users },
+      { name: "Inventory" as PageKey, icon: Truck },
     ],
   },
   {
@@ -349,6 +355,8 @@ const loadProductionEntries = async () => {
     Workers: "Manage workforce records and operational allocation.",
     Machines: "Track machine availability and maintenance status.",
     Materials: "Monitor inventory levels and material requirements.",
+    Suppliers: "Manage supplier profiles and material sourcing contacts.",
+    Inventory: "Record stock movements and review inventory transaction history.",
     Reports: "Review operational performance and business summaries.",
     Settings: "Configure your OrderFit workspace.",
   };
@@ -1026,6 +1034,10 @@ const atRiskCount = dashboardStats.atRiskCount;
             <Production orders={orders} />
           ) : page === "Materials" ? (
             <Materials />
+          ) : page === "Suppliers" ? (
+            <Suppliers />
+          ) : page === "Inventory" ? (
+            <InventoryTransactions />
           ) : (
             <section className="panel module-panel">
               <div className="module-empty-icon">

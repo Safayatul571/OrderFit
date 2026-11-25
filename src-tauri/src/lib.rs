@@ -39,6 +39,18 @@ struct Material {
     created_at: String,
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+struct Supplier {
+    id: String,
+    name: String,
+    contact_person: String,
+    phone: String,
+    email: String,
+    address: String,
+    notes: String,
+    created_at: String,
+}
+
 // Inventory transaction history entry.
 #[derive(Debug, Serialize, Deserialize)]
 struct InventoryTransaction {
@@ -169,8 +181,28 @@ fn initialize_database(app: &AppHandle) -> Result<(), String> {
         )
         .map_err(|e| e.to_string())?;
 
+    connection
+        .execute_batch(
+            "CREATE TABLE IF NOT EXISTS suppliers (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                contact_person TEXT NOT NULL DEFAULT '',
+                phone TEXT NOT NULL DEFAULT '',
+                email TEXT NOT NULL DEFAULT '',
+                address TEXT NOT NULL DEFAULT '',
+                notes TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+
+            CREATE INDEX IF NOT EXISTS
+                idx_suppliers_name
+            ON suppliers(name);",
+        )
+        .map_err(|e| e.to_string())?;
+
     Ok(())
 }
+
 
 // Extract the numeric part from quantities such as "500 pcs".
 fn parse_order_quantity(quantity: &str) -> Result<i64, String> {
@@ -465,6 +497,141 @@ fn list_materials(app: AppHandle) -> Result<Vec<Material>, String> {
 }
 
 // Create a new material.
+// List all suppliers.
+#[tauri::command]
+fn list_suppliers(app: AppHandle) -> Result<Vec<Supplier>, String> {
+    let connection = database_connection(&app)?;
+
+    let mut statement = connection
+        .prepare(
+            "SELECT id, name, contact_person, phone, email, address, notes, created_at
+             FROM suppliers
+             ORDER BY name COLLATE NOCASE ASC",
+        )
+        .map_err(|e| e.to_string())?;
+
+    let rows = statement
+        .query_map([], |row| {
+            Ok(Supplier {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                contact_person: row.get(2)?,
+                phone: row.get(3)?,
+                email: row.get(4)?,
+                address: row.get(5)?,
+                notes: row.get(6)?,
+                created_at: row.get(7)?,
+            })
+        })
+        .map_err(|e| e.to_string())?;
+
+    let mut suppliers = Vec::new();
+
+    for supplier in rows {
+        suppliers.push(supplier.map_err(|e| e.to_string())?);
+    }
+
+    Ok(suppliers)
+}
+
+
+// Create a new supplier.
+#[tauri::command]
+fn create_supplier(
+    app: AppHandle,
+    name: String,
+    contact_person: String,
+    phone: String,
+    email: String,
+    address: String,
+    notes: String,
+) -> Result<(), String> {
+    if name.trim().is_empty() {
+        return Err("Supplier name is required.".into());
+    }
+
+    let connection = database_connection(&app)?;
+
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|e| e.to_string())?
+        .as_millis();
+
+    connection.execute(
+        "INSERT INTO suppliers
+            (id, name, contact_person, phone, email, address, notes)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        params![
+            format!("SUP-{timestamp}"),
+            name.trim(),
+            contact_person.trim(),
+            phone.trim(),
+            email.trim(),
+            address.trim(),
+            notes.trim()
+        ],
+    ).map_err(|e| e.to_string())?;
+
+    Ok(())
+}
+
+// Update an existing supplier.
+#[tauri::command]
+fn update_supplier(
+    app: AppHandle,
+    id: String,
+    name: String,
+    contact_person: String,
+    phone: String,
+    email: String,
+    address: String,
+    notes: String,
+) -> Result<(), String> {
+    if name.trim().is_empty() {
+        return Err("Supplier name is required.".into());
+    }
+
+    let connection = database_connection(&app)?;
+
+    let changed = connection.execute(
+        "UPDATE suppliers
+         SET name = ?1, contact_person = ?2, phone = ?3,
+             email = ?4, address = ?5, notes = ?6
+         WHERE id = ?7",
+        params![
+            name.trim(),
+            contact_person.trim(),
+            phone.trim(),
+            email.trim(),
+            address.trim(),
+            notes.trim(),
+            id
+        ],
+    ).map_err(|e| e.to_string())?;
+
+    if changed == 0 {
+        return Err("Supplier not found.".into());
+    }
+
+    Ok(())
+}
+
+// Delete a supplier.
+#[tauri::command]
+fn delete_supplier(app: AppHandle, id: String) -> Result<(), String> {
+    let connection = database_connection(&app)?;
+
+    let changed = connection.execute(
+        "DELETE FROM suppliers WHERE id = ?1",
+        params![id],
+    ).map_err(|e| e.to_string())?;
+
+    if changed == 0 {
+        return Err("Supplier not found.".into());
+    }
+
+    Ok(())
+}
 #[tauri::command]
 fn create_material(
     app: AppHandle,
@@ -1065,6 +1232,10 @@ pub fn run() {
     update_order,
     delete_order,
     list_materials,
+    list_suppliers,
+    create_supplier,
+    update_supplier,
+    delete_supplier,
     create_material,
     update_material,
     delete_material,
