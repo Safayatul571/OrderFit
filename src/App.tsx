@@ -39,6 +39,7 @@ import Planning from "./Planning";
 import Materials from "./Materials";
 import InventoryTransactions from "./InventoryTransactions";
 import Suppliers from "./Suppliers";
+import Workers from "./Workers";
 import PurchaseOrders from "./PurchaseOrders";
 import "./App.css";
 
@@ -1041,6 +1042,8 @@ const atRiskCount = dashboardStats.atRiskCount;
             <Planning orders={orders} />
           ) : page === "Materials" ? (
             <Materials />
+          ) : page === "Workers" ? (
+            <Workers />
           ) : page === "Suppliers" ? (
             <Suppliers />
           ) : page === "Purchase Orders" ? (
@@ -1052,7 +1055,7 @@ const atRiskCount = dashboardStats.atRiskCount;
               <div className="module-empty-icon">
                                 {page === "Orders" ? (
                   <ClipboardList />
-                ) : page === "Buyers" || page === "Workers" ? (
+                ) : page === "Buyers" ? (
                   <Users />
                 ) : page === "Machines" ? (
                   <Wrench />

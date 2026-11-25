@@ -1,4 +1,4 @@
-use rusqlite::{Connection, params};
+﻿use rusqlite::{Connection, params};
 use serde::{Deserialize, Serialize};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Manager};
@@ -54,6 +54,21 @@ struct Material {
     created_at: String,
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+struct Worker {
+    id: String,
+    employee_code: String,
+    name: String,
+    phone: String,
+    address: String,
+    designation: String,
+    department: String,
+    skills: String,
+    joining_date: String,
+    status: String,
+    notes: String,
+    created_at: String,
+}
 #[derive(Debug, Serialize, Deserialize)]
 struct Supplier {
     id: String,
@@ -254,6 +269,34 @@ fn initialize_database(app: &AppHandle) -> Result<(), String> {
         )
         .map_err(|e| e.to_string())?;
 
+    connection
+        .execute_batch(
+            "CREATE TABLE IF NOT EXISTS workers (
+                id TEXT PRIMARY KEY,
+                employee_code TEXT NOT NULL COLLATE NOCASE UNIQUE,
+                name TEXT NOT NULL,
+                phone TEXT NOT NULL DEFAULT '',
+                address TEXT NOT NULL DEFAULT '',
+                designation TEXT NOT NULL DEFAULT '',
+                department TEXT NOT NULL DEFAULT '',
+                skills TEXT NOT NULL DEFAULT '',
+                joining_date TEXT NOT NULL DEFAULT '',
+                status TEXT NOT NULL DEFAULT 'Active'
+                    CHECK(status IN ('Active', 'Inactive', 'On Leave')),
+                notes TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_workers_name
+                ON workers(name);
+
+            CREATE INDEX IF NOT EXISTS idx_workers_status
+                ON workers(status);
+
+            CREATE INDEX IF NOT EXISTS idx_workers_department
+                ON workers(department);",
+        )
+        .map_err(|e| e.to_string())?;
     connection
         .execute_batch(
             "CREATE TABLE IF NOT EXISTS purchase_orders (
@@ -1394,6 +1437,199 @@ fn delete_supplier(app: AppHandle, id: String) -> Result<(), String> {
     Ok(())
 }
 #[tauri::command]
+fn list_workers(app: AppHandle) -> Result<Vec<Worker>, String> {
+    let connection = database_connection(&app)?;
+
+    let mut statement = connection
+        .prepare(
+            "SELECT id, employee_code, name, phone, address,
+                    designation, department, skills, joining_date,
+                    status, notes, created_at
+             FROM workers
+             ORDER BY name COLLATE NOCASE ASC",
+        )
+        .map_err(|e| e.to_string())?;
+
+    let rows = statement
+        .query_map([], |row| {
+            Ok(Worker {
+                id: row.get(0)?,
+                employee_code: row.get(1)?,
+                name: row.get(2)?,
+                phone: row.get(3)?,
+                address: row.get(4)?,
+                designation: row.get(5)?,
+                department: row.get(6)?,
+                skills: row.get(7)?,
+                joining_date: row.get(8)?,
+                status: row.get(9)?,
+                notes: row.get(10)?,
+                created_at: row.get(11)?,
+            })
+        })
+        .map_err(|e| e.to_string())?;
+
+    let mut workers = Vec::new();
+
+    for worker in rows {
+        workers.push(worker.map_err(|e| e.to_string())?);
+    }
+
+    Ok(workers)
+}
+
+#[tauri::command]
+fn create_worker(
+    app: AppHandle,
+    employee_code: String,
+    name: String,
+    phone: String,
+    address: String,
+    designation: String,
+    department: String,
+    skills: String,
+    joining_date: String,
+    status: String,
+    notes: String,
+) -> Result<(), String> {
+    if employee_code.trim().is_empty() {
+        return Err("Employee ID is required.".into());
+    }
+
+    if name.trim().is_empty() {
+        return Err("Worker name is required.".into());
+    }
+
+    if !["Active", "Inactive", "On Leave"].contains(&status.as_str()) {
+        return Err("Invalid worker status.".into());
+    }
+
+    let connection = database_connection(&app)?;
+
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|e| e.to_string())?
+        .as_millis();
+
+    connection
+        .execute(
+            "INSERT INTO workers (
+                id, employee_code, name, phone, address,
+                designation, department, skills, joining_date,
+                status, notes
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+            params![
+                format!("WRK-{timestamp}"),
+                employee_code.trim(),
+                name.trim(),
+                phone.trim(),
+                address.trim(),
+                designation.trim(),
+                department.trim(),
+                skills.trim(),
+                joining_date.trim(),
+                status,
+                notes.trim()
+            ],
+        )
+        .map_err(|e| {
+            if e.to_string().contains("UNIQUE constraint failed") {
+                "This Employee ID already exists.".to_string()
+            } else {
+                e.to_string()
+            }
+        })?;
+
+    Ok(())
+}
+
+#[tauri::command]
+fn update_worker(
+    app: AppHandle,
+    id: String,
+    employee_code: String,
+    name: String,
+    phone: String,
+    address: String,
+    designation: String,
+    department: String,
+    skills: String,
+    joining_date: String,
+    status: String,
+    notes: String,
+) -> Result<(), String> {
+    if employee_code.trim().is_empty() {
+        return Err("Employee ID is required.".into());
+    }
+
+    if name.trim().is_empty() {
+        return Err("Worker name is required.".into());
+    }
+
+    if !["Active", "Inactive", "On Leave"].contains(&status.as_str()) {
+        return Err("Invalid worker status.".into());
+    }
+
+    let connection = database_connection(&app)?;
+
+    let changed = connection
+        .execute(
+            "UPDATE workers
+             SET employee_code = ?1,
+                 name = ?2,
+                 phone = ?3,
+                 address = ?4,
+                 designation = ?5,
+                 department = ?6,
+                 skills = ?7,
+                 joining_date = ?8,
+                 status = ?9,
+                 notes = ?10
+             WHERE id = ?11",
+            params![
+                employee_code.trim(),
+                name.trim(),
+                phone.trim(),
+                address.trim(),
+                designation.trim(),
+                department.trim(),
+                skills.trim(),
+                joining_date.trim(),
+                status,
+                notes.trim(),
+                id
+            ],
+        )
+        .map_err(|e| {
+            if e.to_string().contains("UNIQUE constraint failed") {
+                "This Employee ID already exists.".to_string()
+            } else {
+                e.to_string()
+            }
+        })?;
+
+    if changed == 0 {
+        return Err("Worker not found.".into());
+    }
+
+    Ok(())
+}
+
+#[tauri::command]
+fn delete_worker(app: AppHandle, id: String) -> Result<(), String> {
+    let connection = database_connection(&app)?;
+
+    let changed = connection
+        .execute("DELETE FROM workers WHERE id = ?1", params![id])
+        .map_err(|e| e.to_string())?;
+
+    if changed == 0 {
+        return Err("Worker not found.".into());
+    }
+
+    Ok(())
+}
+#[tauri::command]
 fn create_material(
     app: AppHandle,
     sku: String,
@@ -2214,6 +2450,10 @@ pub fn run() {
             create_supplier,
             update_supplier,
             delete_supplier,
+            list_workers,
+            create_worker,
+            update_worker,
+            delete_worker,
             create_material,
             update_material,
             delete_material,
