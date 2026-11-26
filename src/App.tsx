@@ -1,4 +1,4 @@
-
+﻿
 import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useMemo, useState } from "react";
 import {
@@ -39,9 +39,11 @@ import Planning from "./Planning";
 import Materials from "./Materials";
 import InventoryTransactions from "./InventoryTransactions";
 import Suppliers from "./Suppliers";
+import Buyers from "./Buyers";
 import Workers from "./Workers";
 import Machines from "./Machines";
 import PurchaseOrders from "./PurchaseOrders";
+import Reports from "./Reports";
 import "./App.css";
 
 type PageKey =
@@ -353,7 +355,7 @@ const loadProductionEntries = async () => {
   };
 
   const pageDescriptions: Record<PageKey, string> = {
-    Dashboard: "HereÃ¢â‚¬â„¢s whatÃ¢â‚¬â„¢s happening across your factory today.",
+    Dashboard: "HereÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢s whatÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢s happening across your factory today.",
     Orders: "Manage buyer orders, delivery dates and fulfilment progress.",
     Production: "Monitor production output and stage-level progress.",
     Planning: "Coordinate capacity, schedules and production priorities.",
@@ -548,7 +550,7 @@ const atRiskCount = dashboardStats.atRiskCount;
                 placeholder="Search anything..."
               />
 
-              <kbd>Ã¢Å’Ëœ K</kbd>
+              <kbd>ÃƒÂ¢Ã…â€™Ã‹Å“ K</kbd>
             </div>
 
             <div className="notification-wrap">
@@ -603,23 +605,25 @@ const atRiskCount = dashboardStats.atRiskCount;
               <p>{pageDescriptions[page]}</p>
             </div>
 
-            <div className="heading-actions">
-              <button
-                className="button button-secondary"
-                onClick={() => setPage("Reports")}
-              >
-                <FileBarChart size={16} />
-                View reports
-              </button>
+            {page !== "Reports" && (
+              <div className="heading-actions">
+                <button
+                  className="button button-secondary"
+                  onClick={() => setPage("Reports")}
+                >
+                  <FileBarChart size={16} />
+                  View reports
+                </button>
 
-              <button
-                className="button button-primary"
-                onClick={openCreateModal}
-              >
-                <Plus size={17} />
-                Create order
-              </button>
-            </div>
+                <button
+                  className="button button-primary"
+                  onClick={openCreateModal}
+                >
+                  <Plus size={17} />
+                  Create order
+                </button>
+              </div>
+            )}
           </div>
 
           {databaseError && (
@@ -1001,7 +1005,7 @@ const atRiskCount = dashboardStats.atRiskCount;
                         <div className="attention-copy">
                           <strong>Order delivery at risk</strong>
                           <span>
-                            {order.buyer} Ã‚Â· {order.id}
+                            {order.buyer} Ãƒâ€šÃ‚Â· {order.id}
                           </span>
                           <small>{order.due}</small>
                         </div>
@@ -1047,10 +1051,14 @@ const atRiskCount = dashboardStats.atRiskCount;
             <Machines />
           ) : page === "Workers" ? (
             <Workers />
+          ) : page === "Buyers" ? (
+            <Buyers orders={orders} />
           ) : page === "Suppliers" ? (
             <Suppliers />
           ) : page === "Purchase Orders" ? (
             <PurchaseOrders />
+          ) : page === "Reports" ? (
+            <Reports />
           ) : page === "Inventory" ? (
             <InventoryTransactions />
           ) : (
@@ -1058,11 +1066,6 @@ const atRiskCount = dashboardStats.atRiskCount;
               <div className="module-empty-icon">
                                 {page === "Orders" ? (
                   <ClipboardList />
-                ) : page === "Buyers" ? (
-                  <Users />
-
-                ) : page === "Reports" ? (
-                  <FileBarChart />
                 ) : (
                   <Settings />
                 )}
@@ -1130,7 +1133,7 @@ const atRiskCount = dashboardStats.atRiskCount;
 
           <footer className="footer">
             <span>
-              Ã‚Â© 2026 OrderFit. Manufacturing operations, made clearer.
+              Ãƒâ€šÃ‚Â© 2026 OrderFit. Manufacturing operations, made clearer.
             </span>
 
             <span>
@@ -1138,7 +1141,7 @@ const atRiskCount = dashboardStats.atRiskCount;
               {databaseError
                 ? "Database connection issue"
                 : "Local workspace"}
-              <span className="footer-separator"> Ã‚Â· </span>
+              <span className="footer-separator"> Ãƒâ€šÃ‚Â· </span>
               SQLite
             </span>
           </footer>
@@ -1585,3 +1588,9 @@ function OrderTable({
 }
 
 export default App;
+
+
+
+
+
+

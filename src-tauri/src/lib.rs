@@ -1,8 +1,132 @@
-use rusqlite::{Connection, OptionalExtension, params};
+﻿use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Manager};
 
+#[derive(Debug, Serialize, Deserialize)]
+struct OrderReportSummary {
+    total_orders: i64,
+    active_orders: i64,
+    completed_orders: i64,
+    at_risk_orders: i64,
+    average_progress: f64,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct ProductionStageSummary {
+    stage: String,
+    record_count: i64,
+    completed_quantity: i64,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct InventoryReportSummary {
+    total_materials: i64,
+    low_stock_materials: i64,
+    out_of_stock_materials: i64,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct ProcurementReportSummary {
+    total_purchase_orders: i64,
+    open_purchase_orders: i64,
+    received_purchase_orders: i64,
+    ordered_value: f64,
+    outstanding_value: f64,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct MachineReportSummary {
+    total_machines: i64,
+    active_machines: i64,
+    idle_machines: i64,
+    maintenance_machines: i64,
+    inactive_machines: i64,
+    total_maintenance_cost: f64,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct ReportsSummary {
+    orders: OrderReportSummary,
+    production_by_stage: Vec<ProductionStageSummary>,
+    inventory: InventoryReportSummary,
+    procurement: ProcurementReportSummary,
+    machines: MachineReportSummary,
+}
+#[derive(Debug, Serialize, Deserialize)]
+struct FactoryHealthReport {
+    generated_at: String,
+    overall_status: String,
+    summary: ReportsSummary,
+    overdue_order_count: i64,
+    delayed_schedule_count: i64,
+    late_purchase_order_count: i64,
+    machine_attention_count: i64,
+    order_issues: Vec<ReportOrderIssue>,
+    production_schedules: Vec<ReportScheduleIssue>,
+    material_issues: Vec<ReportMaterialIssue>,
+    late_purchase_orders: Vec<ReportPurchaseOrderIssue>,
+    machine_issues: Vec<ReportMachineIssue>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct ReportOrderIssue {
+    id: String,
+    buyer: String,
+    product: String,
+    quantity: String,
+    due: String,
+    progress: i32,
+    status: String,
+    is_overdue: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct ReportScheduleIssue {
+    id: String,
+    order_id: String,
+    buyer: String,
+    product: String,
+    stage: String,
+    planned_quantity: i64,
+    actual_quantity: i64,
+    target_date: String,
+    status: String,
+    behind_plan: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct ReportMaterialIssue {
+    id: String,
+    sku: String,
+    name: String,
+    category: String,
+    unit: String,
+    current_stock: f64,
+    minimum_stock: f64,
+    is_out_of_stock: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct ReportPurchaseOrderIssue {
+    id: String,
+    po_number: String,
+    supplier_name: String,
+    expected_delivery_date: String,
+    status: String,
+    outstanding_value: f64,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct ReportMachineIssue {
+    id: String,
+    machine_code: String,
+    name: String,
+    department: String,
+    status: String,
+    next_maintenance_date: String,
+    attention_reason: String,
+}
 #[derive(Debug, Serialize, Deserialize)]
 struct Order {
     id: String,
@@ -111,6 +235,18 @@ struct Supplier {
     contact_person: String,
     phone: String,
     email: String,
+    address: String,
+    notes: String,
+    created_at: String,
+}
+#[derive(Debug, Serialize, Deserialize)]
+struct Buyer {
+    id: String,
+    name: String,
+    contact_person: String,
+    email: String,
+    phone: String,
+    country: String,
     address: String,
     notes: String,
     created_at: String,
@@ -304,6 +440,38 @@ fn initialize_database(app: &AppHandle) -> Result<(), String> {
         )
         .map_err(|e| e.to_string())?;
 
+    connection
+        .execute_batch(
+            "CREATE TABLE IF NOT EXISTS buyers (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL COLLATE NOCASE UNIQUE,
+                contact_person TEXT NOT NULL DEFAULT '',
+                email TEXT NOT NULL DEFAULT '',
+                phone TEXT NOT NULL DEFAULT '',
+                country TEXT NOT NULL DEFAULT '',
+                address TEXT NOT NULL DEFAULT '',
+                notes TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_buyers_name
+                ON buyers(name);",
+        )
+        .map_err(|e| e.to_string())?;
+
+    // Preserve existing order buyer names during migration.
+    connection
+        .execute(
+            "INSERT OR IGNORE INTO buyers (id, name)
+             SELECT
+                'BUY-MIG-' || lower(hex(randomblob(8))),
+                TRIM(buyer)
+             FROM orders
+             WHERE TRIM(buyer) <> ''
+             GROUP BY TRIM(buyer) COLLATE NOCASE",
+            [],
+        )
+        .map_err(|e| e.to_string())?;
     connection
         .execute_batch(
             "CREATE TABLE IF NOT EXISTS workers (
@@ -573,6 +741,490 @@ fn validate_production_quantity(
 }
 
 #[tauri::command]
+fn get_reports_summary(app: AppHandle) -> Result<ReportsSummary, String> {
+    let connection = database_connection(&app)?;
+
+    let orders = connection
+        .query_row(
+            "SELECT
+                COUNT(*),
+                COALESCE(SUM(CASE WHEN status <> 'Completed' THEN 1 ELSE 0 END), 0),
+                COALESCE(SUM(CASE WHEN status = 'Completed' THEN 1 ELSE 0 END), 0),
+                COALESCE(SUM(CASE WHEN status = 'At Risk' THEN 1 ELSE 0 END), 0),
+                COALESCE(AVG(progress), 0)
+             FROM orders",
+            [],
+            |row| {
+                Ok(OrderReportSummary {
+                    total_orders: row.get(0)?,
+                    active_orders: row.get(1)?,
+                    completed_orders: row.get(2)?,
+                    at_risk_orders: row.get(3)?,
+                    average_progress: row.get(4)?,
+                })
+            },
+        )
+        .map_err(|e| e.to_string())?;
+
+    let production_by_stage = {
+        let mut statement = connection
+            .prepare(
+                "SELECT
+                    stages.stage,
+                    COUNT(p.id),
+                    COALESCE(SUM(p.completed_quantity), 0)
+                 FROM (
+                    SELECT 'Cutting' AS stage
+                    UNION ALL SELECT 'Sewing'
+                    UNION ALL SELECT 'Finishing'
+                    UNION ALL SELECT 'QC'
+                 ) stages
+                 LEFT JOIN production_entries p
+                    ON p.stage = stages.stage
+                 GROUP BY stages.stage
+                 ORDER BY CASE stages.stage
+                    WHEN 'Cutting' THEN 1
+                    WHEN 'Sewing' THEN 2
+                    WHEN 'Finishing' THEN 3
+                    WHEN 'QC' THEN 4
+                 END",
+            )
+            .map_err(|e| e.to_string())?;
+
+        let rows = statement
+            .query_map([], |row| {
+                Ok(ProductionStageSummary {
+                    stage: row.get(0)?,
+                    record_count: row.get(1)?,
+                    completed_quantity: row.get(2)?,
+                })
+            })
+            .map_err(|e| e.to_string())?;
+
+        let mut result = Vec::new();
+
+        for row in rows {
+            result.push(row.map_err(|e| e.to_string())?);
+        }
+
+        result
+    };
+
+    let inventory = connection
+        .query_row(
+            "SELECT
+                COUNT(*),
+                COALESCE(SUM(
+                    CASE WHEN stock <= minimum_stock THEN 1 ELSE 0 END
+                ), 0),
+                COALESCE(SUM(
+                    CASE WHEN stock <= 0 THEN 1 ELSE 0 END
+                ), 0)
+             FROM (
+                SELECT
+                    m.id,
+                    m.minimum_stock,
+                    COALESCE(SUM(t.quantity_change), 0) AS stock
+                FROM materials m
+                LEFT JOIN inventory_transactions t
+                    ON t.material_id = m.id
+                GROUP BY m.id
+             ) material_stock",
+            [],
+            |row| {
+                Ok(InventoryReportSummary {
+                    total_materials: row.get(0)?,
+                    low_stock_materials: row.get(1)?,
+                    out_of_stock_materials: row.get(2)?,
+                })
+            },
+        )
+        .map_err(|e| e.to_string())?;
+
+    let procurement = connection
+        .query_row(
+            "SELECT
+                COUNT(DISTINCT p.id),
+                COUNT(DISTINCT CASE WHEN p.status IN (
+                    'Draft', 'Pending', 'Ordered', 'Partially Received'
+                ) THEN p.id END),
+                COUNT(DISTINCT CASE WHEN p.status = 'Received' THEN p.id END),
+                COALESCE(SUM(
+                    CASE WHEN p.status <> 'Cancelled'
+                        THEN i.ordered_quantity * i.unit_price
+                        ELSE 0
+                    END
+                ), 0),
+                COALESCE(SUM(
+                    CASE WHEN p.status <> 'Cancelled'
+                        THEN (i.ordered_quantity - i.received_quantity) * i.unit_price
+                        ELSE 0
+                    END
+                ), 0)
+             FROM purchase_orders p
+             LEFT JOIN purchase_order_items i
+                ON i.purchase_order_id = p.id",
+            [],
+            |row| {
+                Ok(ProcurementReportSummary {
+                    total_purchase_orders: row.get(0)?,
+                    open_purchase_orders: row.get(1)?,
+                    received_purchase_orders: row.get(2)?,
+                    ordered_value: row.get(3)?,
+                    outstanding_value: row.get(4)?,
+                })
+            },
+        )
+        .map_err(|e| e.to_string())?;
+
+    let machines = connection
+        .query_row(
+            "SELECT
+                COUNT(*),
+                COALESCE(SUM(CASE WHEN status = 'Active' THEN 1 ELSE 0 END), 0),
+                COALESCE(SUM(CASE WHEN status = 'Idle' THEN 1 ELSE 0 END), 0),
+                COALESCE(SUM(CASE WHEN status = 'Maintenance' THEN 1 ELSE 0 END), 0),
+                COALESCE(SUM(CASE WHEN status = 'Inactive' THEN 1 ELSE 0 END), 0),
+                COALESCE((
+                    SELECT SUM(cost) FROM machine_maintenance
+                ), 0)
+             FROM machines",
+            [],
+            |row| {
+                Ok(MachineReportSummary {
+                    total_machines: row.get(0)?,
+                    active_machines: row.get(1)?,
+                    idle_machines: row.get(2)?,
+                    maintenance_machines: row.get(3)?,
+                    inactive_machines: row.get(4)?,
+                    total_maintenance_cost: row.get(5)?,
+                })
+            },
+        )
+        .map_err(|e| e.to_string())?;
+
+    Ok(ReportsSummary {
+        orders,
+        production_by_stage,
+        inventory,
+        procurement,
+        machines,
+    })
+}
+#[tauri::command]
+fn get_factory_health_report(app: AppHandle) -> Result<FactoryHealthReport, String> {
+    let connection = database_connection(&app)?;
+    let summary = get_reports_summary(app.clone())?;
+
+    let generated_at: String = connection
+        .query_row(
+            "SELECT datetime('now', 'localtime')",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+
+    let order_issues = {
+        let mut statement = connection
+            .prepare(
+                "SELECT
+                    id, buyer, product, quantity, due, progress, status,
+                    CASE
+                        WHEN due <> '' AND date(due) < date('now', 'localtime')
+                        THEN 1 ELSE 0
+                    END
+                 FROM orders
+                 WHERE status <> 'Completed'
+                   AND (
+                        status = 'At Risk'
+                        OR (
+                            due <> ''
+                            AND date(due) < date('now', 'localtime')
+                        )
+                   )
+                 ORDER BY
+                    CASE WHEN due <> '' AND date(due) < date('now', 'localtime')
+                        THEN 0 ELSE 1 END,
+                    due ASC",
+            )
+            .map_err(|e| e.to_string())?;
+
+        let rows = statement
+            .query_map([], |row| {
+                Ok(ReportOrderIssue {
+                    id: row.get(0)?,
+                    buyer: row.get(1)?,
+                    product: row.get(2)?,
+                    quantity: row.get(3)?,
+                    due: row.get(4)?,
+                    progress: row.get(5)?,
+                    status: row.get(6)?,
+                    is_overdue: row.get::<_, i64>(7)? != 0,
+                })
+            })
+            .map_err(|e| e.to_string())?;
+
+        let mut items = Vec::new();
+        for row in rows {
+            items.push(row.map_err(|e| e.to_string())?);
+        }
+        items
+    };
+
+    let production_schedules = {
+        let mut statement = connection
+            .prepare(
+                "SELECT
+                    s.id,
+                    s.order_id,
+                    o.buyer,
+                    o.product,
+                    s.stage,
+                    s.planned_quantity,
+                    COALESCE(SUM(p.completed_quantity), 0),
+                    s.target_date,
+                    s.status,
+                    CASE
+                        WHEN s.status = 'Delayed' THEN 1
+                        WHEN date(s.target_date) < date('now', 'localtime')
+                             AND COALESCE(SUM(p.completed_quantity), 0)
+                                 < s.planned_quantity
+                        THEN 1
+                        ELSE 0
+                    END
+                 FROM production_schedules s
+                 JOIN orders o ON o.id = s.order_id
+                 LEFT JOIN production_entries p
+                    ON p.order_id = s.order_id
+                    AND p.stage = s.stage
+                 GROUP BY s.id
+                 HAVING s.status <> 'Completed'
+                    OR COALESCE(SUM(p.completed_quantity), 0)
+                        < s.planned_quantity
+                 ORDER BY
+                    CASE WHEN s.status = 'Delayed' THEN 0 ELSE 1 END,
+                    s.target_date ASC",
+            )
+            .map_err(|e| e.to_string())?;
+
+        let rows = statement
+            .query_map([], |row| {
+                Ok(ReportScheduleIssue {
+                    id: row.get(0)?,
+                    order_id: row.get(1)?,
+                    buyer: row.get(2)?,
+                    product: row.get(3)?,
+                    stage: row.get(4)?,
+                    planned_quantity: row.get(5)?,
+                    actual_quantity: row.get(6)?,
+                    target_date: row.get(7)?,
+                    status: row.get(8)?,
+                    behind_plan: row.get::<_, i64>(9)? != 0,
+                })
+            })
+            .map_err(|e| e.to_string())?;
+
+        let mut items = Vec::new();
+        for row in rows {
+            items.push(row.map_err(|e| e.to_string())?);
+        }
+        items
+    };
+
+    let material_issues = {
+        let mut statement = connection
+            .prepare(
+                "SELECT
+                    m.id,
+                    m.sku,
+                    m.name,
+                    m.category,
+                    m.unit,
+                    COALESCE(SUM(t.quantity_change), 0),
+                    m.minimum_stock,
+                    CASE
+                        WHEN COALESCE(SUM(t.quantity_change), 0) <= 0
+                        THEN 1 ELSE 0
+                    END
+                 FROM materials m
+                 LEFT JOIN inventory_transactions t
+                    ON t.material_id = m.id
+                 GROUP BY m.id
+                 HAVING COALESCE(SUM(t.quantity_change), 0)
+                    <= m.minimum_stock
+                 ORDER BY
+                    CASE WHEN COALESCE(SUM(t.quantity_change), 0) <= 0
+                        THEN 0 ELSE 1 END,
+                    m.name ASC",
+            )
+            .map_err(|e| e.to_string())?;
+
+        let rows = statement
+            .query_map([], |row| {
+                Ok(ReportMaterialIssue {
+                    id: row.get(0)?,
+                    sku: row.get(1)?,
+                    name: row.get(2)?,
+                    category: row.get(3)?,
+                    unit: row.get(4)?,
+                    current_stock: row.get(5)?,
+                    minimum_stock: row.get(6)?,
+                    is_out_of_stock: row.get::<_, i64>(7)? != 0,
+                })
+            })
+            .map_err(|e| e.to_string())?;
+
+        let mut items = Vec::new();
+        for row in rows {
+            items.push(row.map_err(|e| e.to_string())?);
+        }
+        items
+    };
+
+    let late_purchase_orders = {
+        let mut statement = connection
+            .prepare(
+                "SELECT
+                    p.id,
+                    p.po_number,
+                    s.name,
+                    p.expected_delivery_date,
+                    p.status,
+                    COALESCE(SUM(
+                        (i.ordered_quantity - i.received_quantity) * i.unit_price
+                    ), 0)
+                 FROM purchase_orders p
+                 JOIN suppliers s ON s.id = p.supplier_id
+                 LEFT JOIN purchase_order_items i
+                    ON i.purchase_order_id = p.id
+                 WHERE p.status IN ('Pending', 'Ordered', 'Partially Received')
+                   AND p.expected_delivery_date <> ''
+                   AND date(p.expected_delivery_date) < date('now', 'localtime')
+                 GROUP BY p.id
+                 ORDER BY p.expected_delivery_date ASC",
+            )
+            .map_err(|e| e.to_string())?;
+
+        let rows = statement
+            .query_map([], |row| {
+                Ok(ReportPurchaseOrderIssue {
+                    id: row.get(0)?,
+                    po_number: row.get(1)?,
+                    supplier_name: row.get(2)?,
+                    expected_delivery_date: row.get(3)?,
+                    status: row.get(4)?,
+                    outstanding_value: row.get(5)?,
+                })
+            })
+            .map_err(|e| e.to_string())?;
+
+        let mut items = Vec::new();
+        for row in rows {
+            items.push(row.map_err(|e| e.to_string())?);
+        }
+        items
+    };
+
+    let machine_issues = {
+        let mut statement = connection
+            .prepare(
+                "SELECT
+                    id,
+                    machine_code,
+                    name,
+                    department,
+                    status,
+                    next_maintenance_date,
+                    CASE
+                        WHEN status = 'Maintenance' THEN 'Currently under maintenance'
+                        WHEN status = 'Inactive' THEN 'Machine is inactive'
+                        ELSE 'Maintenance date is due'
+                    END
+                 FROM machines
+                 WHERE status IN ('Maintenance', 'Inactive')
+                    OR (
+                        next_maintenance_date <> ''
+                        AND date(next_maintenance_date) <= date('now', 'localtime')
+                    )
+                 ORDER BY
+                    CASE
+                        WHEN status = 'Inactive' THEN 0
+                        WHEN status = 'Maintenance' THEN 1
+                        ELSE 2
+                    END,
+                    name ASC",
+            )
+            .map_err(|e| e.to_string())?;
+
+        let rows = statement
+            .query_map([], |row| {
+                Ok(ReportMachineIssue {
+                    id: row.get(0)?,
+                    machine_code: row.get(1)?,
+                    name: row.get(2)?,
+                    department: row.get(3)?,
+                    status: row.get(4)?,
+                    next_maintenance_date: row.get(5)?,
+                    attention_reason: row.get(6)?,
+                })
+            })
+            .map_err(|e| e.to_string())?;
+
+        let mut items = Vec::new();
+        for row in rows {
+            items.push(row.map_err(|e| e.to_string())?);
+        }
+        items
+    };
+
+    let overdue_order_count = order_issues
+        .iter()
+        .filter(|item| item.is_overdue)
+        .count() as i64;
+
+    let delayed_schedule_count = production_schedules
+        .iter()
+        .filter(|item| item.behind_plan)
+        .count() as i64;
+
+    let late_purchase_order_count = late_purchase_orders.len() as i64;
+    let machine_attention_count = machine_issues.len() as i64;
+
+    let critical_issues =
+        overdue_order_count
+        + late_purchase_order_count
+        + summary.inventory.out_of_stock_materials;
+
+    let attention_issues =
+        summary.orders.at_risk_orders
+        + delayed_schedule_count
+        + summary.inventory.low_stock_materials
+        + machine_attention_count;
+
+    let overall_status = if critical_issues > 0 {
+        "Critical"
+    } else if attention_issues > 0 {
+        "Needs Attention"
+    } else {
+        "Good"
+    };
+
+    Ok(FactoryHealthReport {
+        generated_at,
+        overall_status: overall_status.to_string(),
+        summary,
+        overdue_order_count,
+        delayed_schedule_count,
+        late_purchase_order_count,
+        machine_attention_count,
+        order_issues,
+        production_schedules,
+        material_issues,
+        late_purchase_orders,
+        machine_issues,
+    })
+}
+#[tauri::command]
 fn list_orders(app: AppHandle) -> Result<Vec<Order>, String> {
     let connection = database_connection(&app)?;
 
@@ -618,7 +1270,7 @@ fn create_order(
         return Err("Buyer, product and quantity are required.".into());
     }
 
-    let connection = database_connection(&app)?;
+    let mut connection = database_connection(&app)?;
 
     let timestamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -626,6 +1278,7 @@ fn create_order(
         .as_millis();
 
     let id = format!("ORD-{timestamp}");
+    let buyer_id = format!("BUY-{timestamp}");
 
     let order = Order {
         id,
@@ -637,7 +1290,17 @@ fn create_order(
         status: "On Track".to_string(),
     };
 
-    connection
+    let transaction = connection.transaction().map_err(|e| e.to_string())?;
+
+    transaction
+        .execute(
+            "INSERT OR IGNORE INTO buyers (id, name)
+             VALUES (?1, ?2)",
+            params![buyer_id, order.buyer],
+        )
+        .map_err(|e| e.to_string())?;
+
+    transaction
         .execute(
             "INSERT INTO orders
              (id, buyer, product, quantity, due, progress, status)
@@ -653,6 +1316,8 @@ fn create_order(
             ],
         )
         .map_err(|e| e.to_string())?;
+
+    transaction.commit().map_err(|e| e.to_string())?;
 
     Ok(order)
 }
@@ -680,9 +1345,26 @@ fn update_order(
         return Err("Invalid order status.".into());
     }
 
-    let connection = database_connection(&app)?;
+    let mut connection = database_connection(&app)?;
 
-    let changed = connection
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|e| e.to_string())?
+        .as_millis();
+
+    let buyer_id = format!("BUY-{timestamp}");
+
+    let transaction = connection.transaction().map_err(|e| e.to_string())?;
+
+    transaction
+        .execute(
+            "INSERT OR IGNORE INTO buyers (id, name)
+             VALUES (?1, ?2)",
+            params![buyer_id, buyer.trim()],
+        )
+        .map_err(|e| e.to_string())?;
+
+    let changed = transaction
         .execute(
             "UPDATE orders
              SET buyer = ?1, product = ?2, quantity = ?3,
@@ -703,6 +1385,8 @@ fn update_order(
     if changed == 0 {
         return Err("Order not found.".into());
     }
+
+    transaction.commit().map_err(|e| e.to_string())?;
 
     Ok(())
 }
@@ -1523,6 +2207,206 @@ fn delete_supplier(app: AppHandle, id: String) -> Result<(), String> {
 
     if changed == 0 {
         return Err("Supplier not found.".into());
+    }
+
+    Ok(())
+}
+#[tauri::command]
+fn list_buyers(app: AppHandle) -> Result<Vec<Buyer>, String> {
+    let connection = database_connection(&app)?;
+
+    let mut statement = connection
+        .prepare(
+            "SELECT id, name, contact_person, email, phone,
+                    country, address, notes, created_at
+             FROM buyers
+             ORDER BY name COLLATE NOCASE ASC",
+        )
+        .map_err(|e| e.to_string())?;
+
+    let rows = statement
+        .query_map([], |row| {
+            Ok(Buyer {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                contact_person: row.get(2)?,
+                email: row.get(3)?,
+                phone: row.get(4)?,
+                country: row.get(5)?,
+                address: row.get(6)?,
+                notes: row.get(7)?,
+                created_at: row.get(8)?,
+            })
+        })
+        .map_err(|e| e.to_string())?;
+
+    let mut buyers = Vec::new();
+
+    for buyer in rows {
+        buyers.push(buyer.map_err(|e| e.to_string())?);
+    }
+
+    Ok(buyers)
+}
+
+#[tauri::command]
+fn create_buyer(
+    app: AppHandle,
+    name: String,
+    contact_person: String,
+    email: String,
+    phone: String,
+    country: String,
+    address: String,
+    notes: String,
+) -> Result<(), String> {
+    if name.trim().is_empty() {
+        return Err("Buyer name is required.".into());
+    }
+
+    let connection = database_connection(&app)?;
+
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|e| e.to_string())?
+        .as_millis();
+
+    connection
+        .execute(
+            "INSERT INTO buyers (
+                id, name, contact_person, email, phone,
+                country, address, notes
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![
+                format!("BUY-{timestamp}"),
+                name.trim(),
+                contact_person.trim(),
+                email.trim(),
+                phone.trim(),
+                country.trim(),
+                address.trim(),
+                notes.trim()
+            ],
+        )
+        .map_err(|e| {
+            if e.to_string().contains("UNIQUE constraint failed") {
+                "A buyer with this name already exists.".to_string()
+            } else {
+                e.to_string()
+            }
+        })?;
+
+    Ok(())
+}
+
+#[tauri::command]
+fn update_buyer(
+    app: AppHandle,
+    id: String,
+    name: String,
+    contact_person: String,
+    email: String,
+    phone: String,
+    country: String,
+    address: String,
+    notes: String,
+) -> Result<(), String> {
+    if name.trim().is_empty() {
+        return Err("Buyer name is required.".into());
+    }
+
+    let mut connection = database_connection(&app)?;
+    let transaction = connection
+        .transaction()
+        .map_err(|e| e.to_string())?;
+
+    let old_name: String = transaction
+        .query_row(
+            "SELECT name FROM buyers WHERE id = ?1",
+            params![id],
+            |row| row.get(0),
+        )
+        .map_err(|_| "Buyer not found.".to_string())?;
+
+    transaction
+        .execute(
+            "UPDATE buyers
+             SET name = ?1, contact_person = ?2, email = ?3,
+                 phone = ?4, country = ?5, address = ?6, notes = ?7
+             WHERE id = ?8",
+            params![
+                name.trim(),
+                contact_person.trim(),
+                email.trim(),
+                phone.trim(),
+                country.trim(),
+                address.trim(),
+                notes.trim(),
+                id
+            ],
+        )
+        .map_err(|e| {
+            if e.to_string().contains("UNIQUE constraint failed") {
+                "A buyer with this name already exists.".to_string()
+            } else {
+                e.to_string()
+            }
+        })?;
+
+    transaction
+        .execute(
+            "UPDATE orders
+             SET buyer = ?1
+             WHERE buyer = ?2 COLLATE NOCASE",
+            params![name.trim(), old_name],
+        )
+        .map_err(|e| e.to_string())?;
+
+    transaction.commit().map_err(|e| e.to_string())?;
+
+    Ok(())
+}
+
+#[tauri::command]
+fn delete_buyer(app: AppHandle, id: String) -> Result<(), String> {
+    let connection = database_connection(&app)?;
+
+    let buyer_name: String = connection
+        .query_row(
+            "SELECT name FROM buyers WHERE id = ?1",
+            params![id],
+            |row| row.get(0),
+        )
+        .map_err(|e| {
+            if e.to_string().contains("Query returned no rows") {
+                "Buyer not found.".to_string()
+            } else {
+                e.to_string()
+            }
+        })?;
+
+    let linked_orders: i64 = connection
+        .query_row(
+            "SELECT COUNT(*) FROM orders
+             WHERE buyer = ?1 COLLATE NOCASE",
+            params![buyer_name],
+            |row| row.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+
+    if linked_orders > 0 {
+        return Err(format!(
+            "This buyer has {} existing order(s). Delete is blocked to preserve order history.",
+            linked_orders
+        ));
+    }
+
+    let changed = connection
+        .execute("DELETE FROM buyers WHERE id = ?1", params![id])
+        .map_err(|e| e.to_string())?;
+
+    if changed == 0 {
+        return Err("Buyer not found.".into());
     }
 
     Ok(())
@@ -2905,15 +3789,38 @@ fn delete_production_schedule(app: AppHandle, id: String) -> Result<(), String> 
 
     Ok(())
 }
+#[tauri::command]
+fn save_pdf_file(path: String, pdf_data: Vec<u8>) -> Result<(), String> {
+    if path.trim().is_empty() {
+        return Err("A valid PDF save path is required.".into());
+    }
+
+    if !path.to_lowercase().ends_with(".pdf") {
+        return Err("The selected file must have a .pdf extension.".into());
+    }
+
+    if pdf_data.is_empty() {
+        return Err("The generated PDF is empty.".into());
+    }
+
+    std::fs::write(&path, &pdf_data)
+        .map_err(|error| format!("Could not save PDF: {}", error))?;
+
+    Ok(())
+}
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             initialize_database(&app.handle()).map_err(std::io::Error::other)?;
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            save_pdf_file,
+            get_factory_health_report,
+            get_reports_summary,
             list_orders,
             create_order,
             update_order,
@@ -2929,6 +3836,10 @@ pub fn run() {
             create_supplier,
             update_supplier,
             delete_supplier,
+            list_buyers,
+            create_buyer,
+            update_buyer,
+            delete_buyer,
             list_workers,
             create_worker,
             update_worker,
@@ -2957,3 +3868,12 @@ pub fn run() {
         .run(tauri::generate_context!())
         .expect("error while running OrderFit");
 }
+
+
+
+
+
+
+
+
+
