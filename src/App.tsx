@@ -1,4 +1,4 @@
-﻿
+
 import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useMemo, useState } from "react";
 import {
@@ -6,13 +6,11 @@ import {
   ArrowDownRight,
   ArrowRight,
   ArrowUpRight,
-  Bell,
   Boxes,
   CalendarDays,
   CheckCircle2,
   ChevronDown,
   ChevronLeft,
-  ChevronRight,
   CircleHelp,
   ClipboardList,
   Factory,
@@ -20,11 +18,9 @@ import {
   Gauge,
   LayoutDashboard,
   LoaderCircle,
-  Menu,
   MoreHorizontal,
   Pencil,
   Plus,
-  Search,
   Settings,
   ShieldCheck,
   Trash2,
@@ -130,10 +126,8 @@ const [productionError, setProductionError] =
   const [databaseLoading, setDatabaseLoading] = useState(true);
   const [databaseError, setDatabaseError] = useState("");
 
-  const [query, setQuery] = useState("");
+  const [query] = useState("");
   const [filter, setFilter] = useState("All orders");
-
-  const [showNotifications, setShowNotifications] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
 
   const [showOrderModal, setShowOrderModal] = useState(false);
@@ -354,21 +348,7 @@ const loadProductionEntries = async () => {
     }
   };
 
-  const pageDescriptions: Record<PageKey, string> = {
-    Dashboard: "HereÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢s whatÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢s happening across your factory today.",
-    Orders: "Manage buyer orders, delivery dates and fulfilment progress.",
-    Production: "Monitor production output and stage-level progress.",
-    Planning: "Coordinate capacity, schedules and production priorities.",
-    Buyers: "Keep buyer profiles and order relationships organized.",
-    Workers: "Manage workforce records and operational allocation.",
-    Machines: "Track machine availability and maintenance status.",
-    Materials: "Monitor inventory levels and material requirements.",
-    Suppliers: "Manage supplier profiles and material sourcing contacts.",
-    "Purchase Orders": "Create supplier orders, receive materials and track procurement.",
-    Inventory: "Record stock movements and review inventory transaction history.",
-    Reports: "Review operational performance and business summaries.",
-    Settings: "Configure your OrderFit workspace.",
-  };
+
 
   
 
@@ -521,111 +501,9 @@ const atRiskCount = dashboardStats.atRiskCount;
       )}
 
       <main className="main-area">
-        <header className="topbar">
-          <div className="topbar-left">
-            {!sidebarOpen && (
-              <button
-                className="icon-button"
-                onClick={() => setSidebarOpen(true)}
-                aria-label="Open sidebar"
-              >
-                <Menu size={19} />
-              </button>
-            )}
 
-            <div className="breadcrumb">
-              <span>Workspace</span>
-              <ChevronRight size={14} />
-              <strong>{page}</strong>
-            </div>
-          </div>
-
-          <div className="topbar-actions">
-            <div className="global-search">
-              <Search size={16} />
-
-              <input
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-                placeholder="Search anything..."
-              />
-
-              <kbd>ÃƒÂ¢Ã…â€™Ã‹Å“ K</kbd>
-            </div>
-
-            <div className="notification-wrap">
-              <button
-                className="icon-button notification-button"
-                onClick={() =>
-                  setShowNotifications(!showNotifications)
-                }
-                aria-label="Notifications"
-              >
-                <Bell size={18} />
-                {atRiskCount > 0 && <i />}
-              </button>
-
-              {showNotifications && (
-                <div className="notification-popover">
-                  <strong>Notifications</strong>
-
-                  <p>
-                    <span className="notification-dot" />
-                    Your workspace is ready to configure.
-                  </p>
-
-                  {atRiskCount > 0 && (
-                    <p>
-                      <span className="notification-dot amber" />
-                      You have {atRiskCount} orders that need attention.
-                    </p>
-                  )}
-                </div>
-              )}
-            </div>
-
-            <div className="top-avatar">AD</div>
-          </div>
-        </header>
 
         <div className="content">
-          <div className="page-heading">
-            <div>
-              <div className="eyebrow">
-                <span className="live-dot" />
-                WORKSPACE OVERVIEW
-              </div>
-
-              <h1>
-                {page === "Dashboard"
-                  ? "Good morning, Admin"
-                  : page}
-              </h1>
-
-              <p>{pageDescriptions[page]}</p>
-            </div>
-
-            {page !== "Reports" && (
-              <div className="heading-actions">
-                <button
-                  className="button button-secondary"
-                  onClick={() => setPage("Reports")}
-                >
-                  <FileBarChart size={16} />
-                  View reports
-                </button>
-
-                <button
-                  className="button button-primary"
-                  onClick={openCreateModal}
-                >
-                  <Plus size={17} />
-                  Create order
-                </button>
-              </div>
-            )}
-          </div>
-
           {databaseError && (
             <div
               className="panel"

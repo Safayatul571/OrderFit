@@ -572,14 +572,22 @@ export default function Machines() {
                 <input type="date" value={form.purchaseDate} onChange={(e) => updateForm("purchaseDate", e.target.value)} />
               </label>
               <label>Last maintenance date
-                <input type="date" value={form.lastMaintenanceDate} onChange={(e) => updateForm("lastMaintenanceDate", e.target.value)} />
-              </label>
-              <label>Next maintenance date
-                <input type="date" value={form.nextMaintenanceDate} onChange={(e) => updateForm("nextMaintenanceDate", e.target.value)} />
-              </label>
-              <label className="materials-form-full">Notes
-                <textarea rows={3} value={form.notes} onChange={(e) => updateForm("notes", e.target.value)} placeholder="Optional equipment details..." />
-              </label>
+  <input
+    type="date"
+    value={form.lastMaintenanceDate}
+    disabled={!!editing}
+    onChange={(e) => updateForm("lastMaintenanceDate", e.target.value)}
+  />
+</label>
+
+<label>Next maintenance date
+  <input
+    type="date"
+    value={form.nextMaintenanceDate}
+    disabled={!!editing}
+    onChange={(e) => updateForm("nextMaintenanceDate", e.target.value)}
+  />
+</label>
             </div>
 
             {error && (
@@ -655,7 +663,12 @@ export default function Machines() {
                   <label className="materials-form-full">Description
                     <textarea rows={2} value={maintenanceForm.description} onChange={(e) => setMaintenanceForm((f) => ({ ...f, description: e.target.value }))} placeholder="Work performed..." />
                   </label>
-                  <label className="materials-form-full">Notes
+                  {editing && (
+                <p className="materials-form-full" style={{ fontSize: 12, opacity: 0.7 }}>
+                  Maintenance dates are managed by maintenance history.
+                  Add or delete a maintenance record to update these dates.
+                </p>
+              )}              <label className="materials-form-full">Notes
                     <textarea rows={2} value={maintenanceForm.notes} onChange={(e) => setMaintenanceForm((f) => ({ ...f, notes: e.target.value }))} placeholder="Additional notes..." />
                   </label>
                 </div>

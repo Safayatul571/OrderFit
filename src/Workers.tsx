@@ -1,4 +1,4 @@
-﻿import { useEffect, useMemo, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import {
   Plus,
@@ -99,6 +99,16 @@ export default function Workers() {
   const activeCount = workers.filter((worker) => worker.status === "Active").length;
   const inactiveCount = workers.filter((worker) => worker.status === "Inactive").length;
   const leaveCount = workers.filter((worker) => worker.status === "On Leave").length;
+
+  const departmentStats = useMemo(() => {
+    const counts = workers.reduce<Record<string, number>>((result, worker) => {
+      const department = worker.department.trim() || "Unassigned";
+      result[department] = (result[department] || 0) + 1;
+      return result;
+    }, {});
+
+    return Object.entries(counts).sort((a, b) => b[1] - a[1]);
+  }, [workers]);
 
   const openCreateModal = () => {
     setEditing(null);
@@ -441,6 +451,109 @@ export default function Workers() {
             </table>
           </div>
         )}
+      </section>
+
+      <section className="workers-insights-grid">
+        <article className="panel workers-insight-panel">
+          <div className="workers-insight-heading">
+            <div>
+              <h2>Department distribution</h2>
+              <p>Workforce allocation across departments.</p>
+            </div>
+            <span className="workers-insight-icon">
+              <Users size={18} />
+            </span>
+          </div>
+
+          {departmentStats.length === 0 ? (
+            <div className="workers-insight-empty">
+              Add employees with department details to see the distribution.
+            </div>
+          ) : (
+            <div className="workers-department-list">
+              {departmentStats.slice(0, 6).map(([department, count]) => (
+                <div className="workers-department-item" key={department}>
+                  <div className="workers-insight-label">
+                    <strong>{department}</strong>
+                    <span>{count} {count === 1 ? "worker" : "workers"}</span>
+                  </div>
+                  <div className="workers-progress-track">
+                    <div
+                      className="workers-progress-fill department-fill"
+                      style={{
+                        width: `${(count / workers.length) * 100}%`,
+                      }}
+                    />
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </article>
+
+        <article className="panel workers-insight-panel">
+          <div className="workers-insight-heading">
+            <div>
+              <h2>Workforce status</h2>
+              <p>Current employee status breakdown.</p>
+            </div>
+            <span className="workers-insight-icon status-icon">
+              <ShieldCheck size={18} />
+            </span>
+          </div>
+
+          {workers.length === 0 ? (
+            <div className="workers-insight-empty">
+              Workforce status information will appear when employees are added.
+            </div>
+          ) : (
+            <div className="workers-status-list">
+              <div className="workers-status-item">
+                <div className="workers-insight-label">
+                  <span><i className="status-dot active-dot" /> Active</span>
+                  <strong>{activeCount} ({Math.round((activeCount / workers.length) * 100)}%)</strong>
+                </div>
+                <div className="workers-progress-track">
+                  <div
+                    className="workers-progress-fill active-fill"
+                    style={{ width: `${(activeCount / workers.length) * 100}%` }}
+                  />
+                </div>
+              </div>
+
+              <div className="workers-status-item">
+                <div className="workers-insight-label">
+                  <span><i className="status-dot leave-dot" /> On Leave</span>
+                  <strong>{leaveCount} ({Math.round((leaveCount / workers.length) * 100)}%)</strong>
+                </div>
+                <div className="workers-progress-track">
+                  <div
+                    className="workers-progress-fill leave-fill"
+                    style={{ width: `${(leaveCount / workers.length) * 100}%` }}
+                  />
+                </div>
+              </div>
+
+              <div className="workers-status-item">
+                <div className="workers-insight-label">
+                  <span><i className="status-dot inactive-dot" /> Inactive</span>
+                  <strong>{inactiveCount} ({Math.round((inactiveCount / workers.length) * 100)}%)</strong>
+                </div>
+                <div className="workers-progress-track">
+                  <div
+                    className="workers-progress-fill inactive-fill"
+                    style={{ width: `${(inactiveCount / workers.length) * 100}%` }}
+                  />
+                </div>
+              </div>
+            </div>
+          )}
+
+          <div className="workers-status-total">
+            <span>Total registered workforce</span>
+            <strong>{workers.length}</strong>
+          </div>
+        </article>
       </section>
 
       {showModal && (

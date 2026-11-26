@@ -1,4 +1,4 @@
-﻿use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Manager};
@@ -2903,14 +2903,17 @@ fn create_machine_maintenance(
         return Err("Maintenance cost must be a valid non-negative number.".into());
     }
 
-    let connection = database_connection(&app)?;
+    let mut connection = database_connection(&app)?;
+    let transaction = connection.transaction().map_err(|e| e.to_string())?;
+
     let timestamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_err(|e| e.to_string())?
         .as_millis();
+
     let record_id = format!("MNT-{timestamp}");
 
-    connection
+    transaction
         .execute(
             "INSERT INTO machine_maintenance (
                 id, machine_id, service_date, maintenance_type,
@@ -2930,20 +2933,40 @@ fn create_machine_maintenance(
         )
         .map_err(|e| e.to_string())?;
 
+    sync_machine_maintenance_summary(&transaction, machine_id.trim())?;
+
+    transaction.commit().map_err(|e| e.to_string())?;
+
+    Ok(())
+}
+
+fn sync_machine_maintenance_summary(
+    connection: &Connection,
+    machine_id: &str,
+) -> Result<(), String> {
     connection
         .execute(
             "UPDATE machines
-             SET last_maintenance_date = CASE
-                    WHEN last_maintenance_date < ?1 THEN ?1
-                    ELSE last_maintenance_date
-                 END,
-                 next_maintenance_date = ?2
-             WHERE id = ?3",
-            params![
-                service_date.trim(),
-                next_service_date.trim(),
-                machine_id.trim()
-            ],
+             SET last_maintenance_date = COALESCE(
+                    (
+                        SELECT service_date
+                        FROM machine_maintenance
+                        WHERE machine_id = ?1
+                        ORDER BY service_date DESC, created_at DESC, id DESC
+                        LIMIT 1
+                    ), ''
+                 ),
+                 next_maintenance_date = COALESCE(
+                    (
+                        SELECT next_service_date
+                        FROM machine_maintenance
+                        WHERE machine_id = ?1
+                        ORDER BY service_date DESC, created_at DESC, id DESC
+                        LIMIT 1
+                    ), ''
+                 )
+             WHERE id = ?1",
+            params![machine_id],
         )
         .map_err(|e| e.to_string())?;
 
@@ -2952,9 +2975,14 @@ fn create_machine_maintenance(
 
 #[tauri::command]
 fn delete_machine_maintenance(app: AppHandle, id: String) -> Result<(), String> {
-    let connection = database_connection(&app)?;
+    if id.trim().is_empty() {
+        return Err("Maintenance record ID is required.".into());
+    }
 
-    let machine_id: Option<String> = connection
+    let mut connection = database_connection(&app)?;
+    let transaction = connection.transaction().map_err(|e| e.to_string())?;
+
+    let machine_id: Option<String> = transaction
         .query_row(
             "SELECT machine_id FROM machine_maintenance WHERE id = ?1",
             params![id.trim()],
@@ -2963,32 +2991,19 @@ fn delete_machine_maintenance(app: AppHandle, id: String) -> Result<(), String> 
         .optional()
         .map_err(|e| e.to_string())?;
 
-    let machine_id = machine_id.ok_or_else(|| "Maintenance record not found.".to_string())?;
+    let machine_id =
+        machine_id.ok_or_else(|| "Maintenance record not found.".to_string())?;
 
-    connection
+    transaction
         .execute(
             "DELETE FROM machine_maintenance WHERE id = ?1",
             params![id.trim()],
         )
         .map_err(|e| e.to_string())?;
 
-    connection
-        .execute(
-            "UPDATE machines
-             SET last_maintenance_date = COALESCE(
-                    (SELECT service_date FROM machine_maintenance
-                     WHERE machine_id = ?1
-                     ORDER BY service_date DESC, created_at DESC LIMIT 1), ''
-                 ),
-                 next_maintenance_date = COALESCE(
-                    (SELECT next_service_date FROM machine_maintenance
-                     WHERE machine_id = ?1
-                     ORDER BY service_date DESC, created_at DESC LIMIT 1), ''
-                 )
-             WHERE id = ?1",
-            params![machine_id],
-        )
-        .map_err(|e| e.to_string())?;
+    sync_machine_maintenance_summary(&transaction, &machine_id)?;
+
+    transaction.commit().map_err(|e| e.to_string())?;
 
     Ok(())
 }
@@ -3663,6 +3678,33 @@ fn list_production_schedules(app: AppHandle) -> Result<Vec<ProductionSchedule>, 
     Ok(schedules)
 }
 
+fn validate_schedule_order_quantity(
+    connection: &Connection,
+    order_id: &str,
+    planned_quantity: i64,
+) -> Result<(), String> {
+    let order_quantity: Option<String> = connection
+        .query_row(
+            "SELECT quantity FROM orders WHERE id = ?1",
+            params![order_id],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|e| e.to_string())?;
+
+    let order_quantity =
+        order_quantity.ok_or_else(|| "Selected order was not found.".to_string())?;
+
+    let target_quantity = parse_order_quantity(&order_quantity)?;
+
+    if planned_quantity > target_quantity {
+        return Err(format!(
+            "Planned quantity ({planned_quantity}) cannot exceed the order quantity ({target_quantity})."
+        ));
+    }
+
+    Ok(())
+}
 #[tauri::command]
 fn create_production_schedule(
     app: AppHandle,
@@ -3678,17 +3720,7 @@ fn create_production_schedule(
 
     let connection = database_connection(&app)?;
 
-    let exists: bool = connection
-        .query_row(
-            "SELECT EXISTS(SELECT 1 FROM orders WHERE id = ?1)",
-            params![order_id],
-            |row| row.get(0),
-        )
-        .map_err(|e| e.to_string())?;
-
-    if !exists {
-        return Err("Selected order was not found.".into());
-    }
+    validate_schedule_order_quantity(&connection, &order_id, planned_quantity)?;
 
     let timestamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -3739,6 +3771,20 @@ fn update_production_schedule(
     validate_schedule(&stage, planned_quantity, &start_date, &target_date, &status)?;
 
     let connection = database_connection(&app)?;
+
+    let schedule_exists: bool = connection
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM production_schedules WHERE id = ?1)",
+            params![id],
+            |row| row.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+
+    if !schedule_exists {
+        return Err("Production schedule not found.".into());
+    }
+
+    validate_schedule_order_quantity(&connection, &order_id, planned_quantity)?;
 
     let changed = connection
         .execute(
